@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.pytest_cache/
+.mypy_cache/
+
+# Virtual env
+.venv/
+venv/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Outputs
+outputs/
+
+# Local secrets
+configs/keys.local.json
+
+# IDE
+.idea/
+.vscode/
