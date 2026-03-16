@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from memory_eval.eval_core.models import EvalSample
 
 NEGATIVE_PATTERNS = re.compile(
     r"\b(not mentioned|unknown|cannot be determined|can't determine|no information|n/a|none|not available)\b",
@@ -29,6 +30,25 @@ class LocomoEvalSample:
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+    def to_eval_sample(self) -> EvalSample:
+        """
+        Convert LOCOMO sample into evaluator core contract.
+        将 LOCOMO 样本转换为评估核心统一契约。
+        """
+        return EvalSample(
+            sample_id=self.sample_id,
+            question_id=self.question_id,
+            question=self.question,
+            answer_gold=self.answer_gold,
+            task_type=self.task_type,
+            f_key=list(self.f_key),
+            oracle_context=self.oracle_context,
+            evidence_ids=list(self.evidence_ids),
+            evidence_texts=list(self.evidence_texts),
+            evidence_with_time=list(self.evidence_with_time),
+            construction_evidence=dict(self.construction_evidence),
+        )
 
 
 @dataclass

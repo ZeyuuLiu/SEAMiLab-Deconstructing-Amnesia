@@ -39,3 +39,52 @@ This document is a permanent high-level project log for backtracking decisions.
 2. Added `LocomoSampleRegistry` lookup interfaces (`query` / `question_id`).
 3. Added three-layer implementation plan doc under `docs/architecture/`.
 4. Updated README and traceability notes.
+
+### Additional User Constraints Captured
+
+1. Three probes must be fully parallel for efficiency.
+2. f_key LLM instability is acknowledged and deferred from optimization scope.
+3. NEG is defined by "should abstain", and should be handled accordingly in probe logic.
+
+### Additional Assistant Actions Captured
+
+1. Implemented `eval_core` package with parallel probe engine.
+2. Added adapter protocol contracts and evidence-first output schema.
+3. Added runtime query resolution registry interfaces for evaluator integration.
+4. Added v0.2.0 coding specification and iteration record.
+
+## 2026-03-17 (Encoding-focused iteration)
+
+### User Instructions Captured
+
+1. Focus only on encoding probe implementation.
+2. Encoding probe input must explicitly be `Q + M + F_key`.
+3. `M` must come from adapter-layer interfaces over real memory-system storage.
+4. Provide independent test script to verify encoding probe correctness.
+
+### Assistant Actions Captured
+
+1. Added `EncodingAdapterProtocol` with full-memory export and adapter-side matching APIs.
+2. Implemented encoding probe module with evidence-first outputs.
+3. Added independent test script `scripts/test_encoding_probe.py`.
+4. Fixed short-token false-positive matching bug via directed fact matching.
+5. Re-validated compile and test pass.
+
+## 2026-03-17 (Retrieval-focused iteration)
+
+### User Instructions Captured
+
+1. Focus on retrieval probe implementation with inputs `Q + C_original + F_key`.
+2. Align implementation with `docs/最终指标.md`.
+3. Re-check encoding layer consistency against final metric spec.
+4. Retrieval probe may use advanced LLM-assisted judgement.
+5. Add retrieval test script.
+6. Improve encoding with optional LLM-assisted judgement and update tests/README.
+
+### Assistant Actions Captured
+
+1. Added dedicated retrieval probe module and adapter protocol.
+2. Added optional LLM-assisted retrieval noise judgement.
+3. Added optional LLM-assisted encoding fact-match judgement.
+4. Added retrieval independent test script and ran validations.
+5. Added alignment-check documentation and updated versioning docs.
