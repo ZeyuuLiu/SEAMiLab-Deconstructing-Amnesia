@@ -1,1 +1,1 @@
-__all__ = ["dataset", "eval_core"]
+__all__ = ["dataset", "eval_core", "adapters"]

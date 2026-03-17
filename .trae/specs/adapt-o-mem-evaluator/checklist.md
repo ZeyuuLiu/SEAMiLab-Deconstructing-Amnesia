@@ -1,0 +1,9 @@
+- [x] O-Mem 适配器实现了评估核心要求的四类协议方法
+- [x] 适配器可产出完整 `AdapterTrace`（memory_view、retrieved_items、answer_oracle）
+- [x] O-Mem 记忆导出在编码探针下可被稳定匹配
+- [x] O-Mem 检索输出可映射为有序 `RetrievedItem` 列表
+- [x] 生成探针使用独立 oracle_context 作答路径
+- [x] 已提供可运行的 O-Mem 轻量联调脚本
+- [x] 脚本支持 question_id/query 的单样本验证
+- [x] API Key 与 Base URL 未被硬编码到仓库文件
+- [x] 小样本运行可输出 `AttributionResult` 及证据字段
