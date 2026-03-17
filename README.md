@@ -281,6 +281,23 @@ Example:
 The demo reads `configs/keys.local.json`.
 When `--fkey-source llm` is used, the demo invokes OpenAI-compatible `/chat/completions`.
 
+For O-Mem adapter minimal run:
+
+```powershell
+python scripts/run_omem_adapter_minimal.py --question-id "conv-26:0" --top-k 5
+```
+
+Credential loading order:
+
+1. `MEMORY_EVAL_API_KEY` / `MEMORY_EVAL_BASE_URL` (or `OPENAI_API_KEY` / `OPENAI_BASE_URL`)
+2. local file (default `configs/keys.local.json`)
+
+Real O-Mem mode can be enabled with:
+
+```powershell
+python scripts/run_omem_adapter_minimal.py --question-id "conv-26:0" --use-real-omem --keys "configs/keys.local.json"
+```
+
 ## Versioning
 
 1. Code version: `VERSION` file (SemVer)
