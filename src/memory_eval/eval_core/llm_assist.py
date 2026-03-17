@@ -70,3 +70,32 @@ def llm_judge_fact_match(
         f"Candidate: {candidate_text}\n"
     )
     return _chat_json(cfg, prompt)
+
+
+def llm_judge_generation_answer(
+    cfg: LLMAssistConfig,
+    question: str,
+    oracle_context: str,
+    answer_oracle: str,
+    answer_gold: str,
+    task_type: str,
+) -> Dict[str, Any] | None:
+    """
+    Judge generation result with optional subtype classification.
+    LLM 判题并输出 FAIL 子类（GH/GF/GRF）。
+    """
+    prompt = (
+        "You are a strict evaluator for memory-system generation.\n"
+        "Return strict JSON only with schema:\n"
+        "{\"correct\": true|false, \"substate\": \"GH|GF|GRF|NONE\", \"grounded\": true|false, \"reason\": \"...\"}\n"
+        "Rules:\n"
+        "- NEG incorrect should be GH.\n"
+        "- POS incorrect and ungrounded should be GF.\n"
+        "- POS incorrect but grounded should be GRF.\n"
+        f"TaskType: {task_type}\n"
+        f"Question: {question}\n"
+        f"OracleContext: {oracle_context}\n"
+        f"OracleAnswer: {answer_oracle}\n"
+        f"GoldAnswer: {answer_gold}\n"
+    )
+    return _chat_json(cfg, prompt)

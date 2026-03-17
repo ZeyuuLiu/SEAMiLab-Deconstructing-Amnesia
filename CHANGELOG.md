@@ -2,6 +2,43 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.4.1] - 2026-03-17
+
+### Added
+
+1. `system/` directory for baseline memory-system source code storage.
+2. Bilingual LLM-assist strategy design doc:
+   - `docs/architecture/llm-assist-strategy-bilingual-v0.4.1.md`
+
+### Changed
+
+1. `EvaluatorConfig.use_llm_assist` is now enabled by default.
+2. README updated for:
+   - `system/` directory convention
+   - default-on LLM assist behavior
+
+## [0.4.0] - 2026-03-17
+
+### Added
+
+1. Generation probe dedicated module:
+   - `src/memory_eval/eval_core/generation.py`
+2. Generation adapter protocol:
+   - `GenerationAdapterProtocol.generate_oracle_answer(...)`
+3. LLM-assisted generation judge:
+   - `llm_judge_generation_answer(...)`
+4. Independent generation test script:
+   - `scripts/test_generation_probe.py`
+5. Generation implementation and full three-probe vulnerability review docs:
+   - `docs/architecture/generation-probe-implementation-v0.4.0.md`
+   - `docs/architecture/three-probe-vulnerability-review-v0.4.0.md`
+
+### Changed
+
+1. Probe wrapper now routes generation logic through dedicated generation module.
+2. Eval core exports include generation adapter protocol and generation APIs.
+3. README updated with generation probe usage and test command.
+
 ## [0.3.0] - 2026-03-17
 
 ### Added

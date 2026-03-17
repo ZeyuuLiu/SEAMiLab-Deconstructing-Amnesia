@@ -116,8 +116,9 @@ class EvaluatorConfig:
     tau_snr: float = 0.2
     neg_noise_score_threshold: float = 0.15
     max_workers: int = 3  # parallel probes / 三探针并行线程数
-    # Optional LLM-assisted probe judgments / 可选LLM辅助判定
-    use_llm_assist: bool = False
+    # LLM-assisted probe judgments are enabled by default.
+    # 三层探针默认开启 LLM 辅助判定。
+    use_llm_assist: bool = True
     llm_model: str = "gpt-4o-mini"
     llm_temperature: float = 0.0
     llm_api_key: str = ""

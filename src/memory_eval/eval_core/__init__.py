@@ -1,6 +1,12 @@
-from memory_eval.eval_core.adapter_protocol import EncodingAdapterProtocol, EvalAdapterProtocol, RetrievalAdapterProtocol
+from memory_eval.eval_core.adapter_protocol import (
+    EncodingAdapterProtocol,
+    EvalAdapterProtocol,
+    GenerationAdapterProtocol,
+    RetrievalAdapterProtocol,
+)
 from memory_eval.eval_core.encoding import EncodingProbeInput, evaluate_encoding_probe, evaluate_encoding_probe_with_adapter
 from memory_eval.eval_core.engine import ParallelThreeProbeEvaluator
+from memory_eval.eval_core.generation import GenerationProbeInput, evaluate_generation_probe, evaluate_generation_probe_with_adapter
 from memory_eval.eval_core.models import (
     AdapterTrace,
     AttributionResult,
@@ -15,12 +21,16 @@ __all__ = [
     "EvalAdapterProtocol",
     "EncodingAdapterProtocol",
     "RetrievalAdapterProtocol",
+    "GenerationAdapterProtocol",
     "EncodingProbeInput",
     "evaluate_encoding_probe",
     "evaluate_encoding_probe_with_adapter",
     "RetrievalProbeInput",
     "evaluate_retrieval_probe",
     "evaluate_retrieval_probe_with_adapter",
+    "GenerationProbeInput",
+    "evaluate_generation_probe",
+    "evaluate_generation_probe_with_adapter",
     "ParallelThreeProbeEvaluator",
     "EvalSample",
     "RetrievedItem",

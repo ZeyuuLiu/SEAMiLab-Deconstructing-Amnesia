@@ -88,3 +88,21 @@ This document is a permanent high-level project log for backtracking decisions.
 3. Added optional LLM-assisted encoding fact-match judgement.
 4. Added retrieval independent test script and ran validations.
 5. Added alignment-check documentation and updated versioning docs.
+
+## 2026-03-17 (Generation-focused iteration)
+
+### User Instructions Captured
+
+1. Focus this step on generation probe implementation.
+2. Follow `docs/最终指标.md` logic:
+   - Use oracle context to generate `A_oracle`
+   - Compare `A_oracle` and `A_gold` (LLM-assisted allowed)
+3. Re-review all three probes for potential vulnerabilities.
+
+### Assistant Actions Captured
+
+1. Added generation adapter protocol and generation module.
+2. Added optional LLM-assisted generation judgement.
+3. Added independent generation test script.
+4. Added full three-probe vulnerability review document.
+5. Updated README/changelog/version/iteration docs.

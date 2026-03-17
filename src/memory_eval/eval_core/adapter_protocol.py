@@ -70,3 +70,22 @@ class RetrievalAdapterProtocol(Protocol):
         返回来自底层记忆系统的有序检索结果 C_original。
         """
         ...
+
+
+class GenerationAdapterProtocol(Protocol):
+    """
+    Dedicated adapter protocol for generation probe.
+    生成探针专用适配器协议：使用完美上下文 C_oracle 生成 A_oracle。
+    """
+
+    def generate_oracle_answer(
+        self,
+        run_ctx: Any,
+        query: str,
+        oracle_context: str,
+    ) -> str:
+        """
+        Ask the underlying memory-system model to answer with oracle context.
+        调用底层记忆系统模型，在完美上下文下生成答案 A_oracle。
+        """
+        ...

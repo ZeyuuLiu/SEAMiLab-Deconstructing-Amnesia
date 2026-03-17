@@ -87,3 +87,22 @@
 - Status: Done
 - Evidence:
   - `docs/architecture/encoding-alignment-check-v0.3.0.md`
+
+## R-014: Generation probe implemented with oracle-context path
+
+- Status: Done
+- Evidence:
+  - `src/memory_eval/eval_core/generation.py`
+  - `src/memory_eval/eval_core/adapter_protocol.py`
+
+## R-015: Generation probe independent test script
+
+- Status: Done
+- Evidence:
+  - `scripts/test_generation_probe.py`
+
+## R-016: Full three-probe vulnerability review document
+
+- Status: Done
+- Evidence:
+  - `docs/architecture/three-probe-vulnerability-review-v0.4.0.md`

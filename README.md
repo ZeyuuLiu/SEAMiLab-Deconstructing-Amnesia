@@ -5,7 +5,7 @@ A clean-slate evaluation framework for long-term memory systems, designed with s
 1. Evaluation Core (framework-owned logic)
 2. Adapter Layer (system-specific integration)
 
-## Current Scope (Iteration 0.3.0)
+## Current Scope (Iteration 0.4.0)
 
 This iteration focuses on:
 
@@ -14,7 +14,9 @@ This iteration focuses on:
 3. Time-aware oracle context and query lookup interfaces for runtime integration
 4. Parallel three-probe evaluation core with adapter protocol contracts
 5. Dedicated encoding probe and retrieval probe implementations with adapter-side contracts
-6. Independent probe test scripts for encoding/retrieval
+6. Independent probe test scripts for encoding/retrieval/generation
+7. `system/` directory for baseline memory-system source code
+8. LLM assist enabled by default for all three probes
 
 This is still a step-by-step implementation stage, not a full production pipeline.
 
@@ -49,6 +51,8 @@ memory-eval-framework/
         locomo_builder.py
   scripts/
     demo_build_locomo_samples.py
+  system/
+    .keep
   data/
     locomo10.json
 ```
@@ -217,6 +221,50 @@ Detailed docs:
 
 1. `docs/architecture/retrieval-probe-implementation-v0.3.0.md`
 2. `docs/architecture/encoding-alignment-check-v0.3.0.md`
+
+## Generation Probe (v0.4.0 focus)
+
+### Required input
+
+1. `Q`
+2. `C_oracle`
+3. `A_oracle` (from original memory-system model under oracle context)
+4. `A_gold`
+5. `task_type`
+
+### Adapter interface
+
+1. `GenerationAdapterProtocol.generate_oracle_answer(run_ctx, query, oracle_context)`
+
+### APIs
+
+1. `evaluate_generation_probe(input, cfg)`
+2. `evaluate_generation_probe_with_adapter(sample, adapter, run_ctx, cfg)`
+
+### Independent test
+
+```powershell
+python scripts/test_generation_probe.py
+```
+
+### Optional LLM-assisted judgement
+
+Set:
+
+1. `EvaluatorConfig(use_llm_assist=True, llm_api_key=..., llm_base_url=..., llm_model=...)`
+
+The probe can call LLM to judge correctness and subtype (`GH/GF/GRF`) while preserving rule fallback.
+
+### Default behavior update
+
+`use_llm_assist` is now enabled by default in `EvaluatorConfig`.
+If no valid key/base_url is provided or LLM call fails, probes automatically fallback to rule-based logic.
+
+Detailed docs:
+
+1. `docs/architecture/generation-probe-implementation-v0.4.0.md`
+2. `docs/architecture/three-probe-vulnerability-review-v0.4.0.md`
+3. `docs/architecture/llm-assist-strategy-bilingual-v0.4.1.md`
 
 ## Time-aware Context Format
 
