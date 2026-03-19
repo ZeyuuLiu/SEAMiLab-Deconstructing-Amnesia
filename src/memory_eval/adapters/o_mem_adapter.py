@@ -28,6 +28,7 @@ class OMemAdapterConfig:
     episodic_memory_refresh_rate: int = 5
     omem_root: str = ""
     allow_fallback_lightweight: bool = False
+    async_call_timeout_sec: float = 120.0
 
 
 def load_runtime_credentials(keys_path: Optional[str] = None, require_complete: bool = False) -> Dict[str, str]:
@@ -321,7 +322,8 @@ class OMemAdapter:
                         speaker_a=run_ctx.get("user_name", "User"),
                         speaker_b=run_ctx.get("agent_name", "Assistant"),
                         llm_model=self.config.llm_model,
-                    )
+                    ),
+                    timeout_sec=self.config.async_call_timeout_sec,
                 )
                 if isinstance(answer, tuple) and answer:
                     return str(answer[0]).strip()
@@ -345,7 +347,8 @@ class OMemAdapter:
                     speaker_a=speaker_a,
                     speaker_b=speaker_b,
                     llm_model=self.config.llm_model,
-                )
+                ),
+                timeout_sec=self.config.async_call_timeout_sec,
             )
             if isinstance(answer, tuple) and answer:
                 out = str(answer[0]).strip()
@@ -535,7 +538,7 @@ class OMemAdapter:
             embedding_model=embedding_model,
             memory_dir=memory_dir,
         )
-        self._run_awaitable(self._feed_turns(memory_manager, turns, user_name))
+        self._run_awaitable(self._feed_turns(memory_manager, turns, user_name), timeout_sec=None)
         self._sync_omem_state(memory_system)
 
         return {
@@ -587,12 +590,15 @@ class OMemAdapter:
         for idx, turn in enumerate(turns):
             speaker = str(turn.get("speaker", ""))
             user_speak = speaker == user_name
-            await memory_manager.receive_message(
-                message=str(turn.get("text", "")),
-                index=int(turn.get("turn_index", idx)),
-                client=memory_manager.client,
-                timestamp=str(turn.get("timestamp", "")),
-                user_speak=user_speak,
+            await asyncio.wait_for(
+                memory_manager.receive_message(
+                    message=str(turn.get("text", "")),
+                    index=int(turn.get("turn_index", idx)),
+                    client=memory_manager.client,
+                    timestamp=str(turn.get("timestamp", "")),
+                    user_speak=user_speak,
+                ),
+                timeout=float(self.config.async_call_timeout_sec),
             )
 
     def _sync_omem_state(self, memory_system: Any) -> None:
@@ -622,13 +628,14 @@ class OMemAdapter:
                 return name
         return "Assistant"
 
-    def _run_awaitable(self, awaitable: Any) -> Any:
+    def _run_awaitable(self, awaitable: Any, timeout_sec: float | None = None) -> Any:
+        wrapped = asyncio.wait_for(awaitable, timeout=float(timeout_sec)) if timeout_sec else awaitable
         try:
-            return asyncio.run(awaitable)
+            return asyncio.run(wrapped)
         except RuntimeError:
             loop = asyncio.new_event_loop()
             try:
-                return loop.run_until_complete(awaitable)
+                return loop.run_until_complete(wrapped)
             finally:
                 loop.close()
 

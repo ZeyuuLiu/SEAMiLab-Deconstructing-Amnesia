@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.6.4] - 2026-03-19
+
+### Changed
+
+1. O-Mem adapter adds async fail-fast timeout guard to avoid indefinite hangs:
+   - new config: `async_call_timeout_sec` (default `120.0`)
+   - `receive_message(...)` in ingestion path is wrapped with timeout
+   - `generate_system_response(...)` calls for online/oracle generation are wrapped with timeout
+2. Strict runs now fail with explicit timeout errors instead of blocking forever on unstable internal O-Mem retry loops.
+
 ## [0.6.3] - 2026-03-19
 
 ### Added
