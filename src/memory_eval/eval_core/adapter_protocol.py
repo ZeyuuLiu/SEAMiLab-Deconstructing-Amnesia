@@ -52,6 +52,20 @@ class EncodingAdapterProtocol(Protocol):
         """
         ...
 
+    def hybrid_retrieve_candidates(
+        self,
+        run_ctx: Any,
+        query: str,
+        f_key: List[str],
+        evidence_texts: List[str],
+        top_n: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """
+        Optional high-recall retrieval for encoding judgement.
+        可选：编码层高召回候选检索（语义+关键词融合）接口。
+        """
+        ...
+
 
 class RetrievalAdapterProtocol(Protocol):
     """
@@ -87,5 +101,17 @@ class GenerationAdapterProtocol(Protocol):
         """
         Ask the underlying memory-system model to answer with oracle context.
         调用底层记忆系统模型，在完美上下文下生成答案 A_oracle。
+        """
+        ...
+
+    def generate_online_answer(
+        self,
+        run_ctx: Any,
+        query: str,
+        top_k: int = 5,
+    ) -> str:
+        """
+        Optional online answer generated from system's normal retrieval path.
+        可选：使用系统正常检索路径生成 A_online。
         """
         ...

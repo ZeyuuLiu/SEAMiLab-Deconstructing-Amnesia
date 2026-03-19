@@ -19,6 +19,7 @@ def run_encoding_probe(sample: EvalSample, memory_view: List[Dict[str, Any]], cf
             memory_corpus=memory_view,
             f_key=list(sample.f_key),
             task_type=sample.task_type,
+            evidence_texts=list(sample.evidence_with_time or sample.evidence_texts),
         ),
         candidate_records=memory_view,
         cfg=cfg,
@@ -36,13 +37,14 @@ def run_retrieval_probe(sample: EvalSample, retrieved_items: List[RetrievedItem]
             retrieved_items=[{"id": it.id, "text": it.text, "score": it.score, "meta": dict(it.meta)} for it in retrieved_items],
             f_key=list(sample.f_key),
             task_type=sample.task_type,
+            evidence_texts=list(sample.evidence_with_time or sample.evidence_texts),
         ),
         cfg=cfg,
         s_enc=None,
     )
 
 
-def run_generation_probe(sample: EvalSample, answer_oracle: str, cfg: EvaluatorConfig) -> ProbeResult:
+def run_generation_probe(sample: EvalSample, answer_oracle: str, cfg: EvaluatorConfig, answer_online: str = "") -> ProbeResult:
     """
     Generation probe (P_gen), independent from encoding/retrieval.
     生成探针（P_gen）独立执行，与编码检索并行。
@@ -51,6 +53,7 @@ def run_generation_probe(sample: EvalSample, answer_oracle: str, cfg: EvaluatorC
         GenerationProbeInput(
             question=sample.question,
             oracle_context=sample.oracle_context,
+            answer_online=str(answer_online or ""),
             answer_oracle=str(answer_oracle or ""),
             answer_gold=sample.answer_gold,
             task_type=sample.task_type,

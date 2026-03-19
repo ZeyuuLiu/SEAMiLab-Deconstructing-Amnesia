@@ -146,12 +146,36 @@ def rank_and_hit_indices(
     计算首命中排序位次与全部命中索引。
     """
     hit_indices: List[int] = []
-    rank = 10**9
+    rank = -1
     for idx, it in enumerate(retrieved_items):
         txt = str(it.get("text", ""))
         matched = any(text_match(f, txt) for f in f_key if f)
         if matched:
             hit_indices.append(idx + 1)
-            if rank == 10**9:
+            if rank == -1:
                 rank = idx + 1
     return rank, hit_indices
+
+
+def token_overlap_snr(
+    retrieved_items: Sequence[Dict[str, str]],
+    f_key: Sequence[str],
+) -> Tuple[float, Dict[str, int]]:
+    """
+    SNR = TokenCount(F_key ∩ C_original) / TokenCount(C_original)
+    按 token 交并计算信噪比。
+    """
+    c_tokens: List[str] = []
+    for it in retrieved_items:
+        c_tokens.extend(split_tokens(str(it.get("text", ""))))
+    f_tokens: List[str] = []
+    for f in f_key:
+        f_tokens.extend(split_tokens(str(f)))
+
+    c_set = set(c_tokens)
+    f_set = set(f_tokens)
+    overlap = len(c_set & f_set) if c_set and f_set else 0
+    denom = len(c_set)
+    if denom <= 0:
+        return 0.0, {"c_token_count": 0, "f_token_count": len(f_set), "overlap_count": 0}
+    return overlap / denom, {"c_token_count": denom, "f_token_count": len(f_set), "overlap_count": overlap}

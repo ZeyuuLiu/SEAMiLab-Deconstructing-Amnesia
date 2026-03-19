@@ -8,7 +8,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from memory_eval.eval_core.models import AdapterTrace, RetrievedItem
 from memory_eval.eval_core.utils import normalize_text, split_tokens, text_match
@@ -27,7 +27,6 @@ class OMemAdapterConfig:
     working_memory_max_size: int = 20
     episodic_memory_refresh_rate: int = 5
     omem_root: str = ""
-    allow_fallback_lightweight: bool = False
 
 
 def load_runtime_credentials(keys_path: Optional[str] = None, require_complete: bool = False) -> Dict[str, str]:
@@ -73,8 +72,6 @@ class OMemAdapter:
             try:
                 return self._ingest_real(sample_id, turns)
             except Exception as exc:
-                if not self.config.allow_fallback_lightweight:
-                    raise RuntimeError(f"real O-Mem ingest failed: {exc}") from exc
                 return {
                     "sample_id": sample_id,
                     "conversation": turns,
@@ -178,109 +175,7 @@ class OMemAdapter:
                 matches.append(item)
         return matches
 
-    def hybrid_retrieve_candidates(
-        self,
-        run_ctx: Any,
-        query: str,
-        f_key: List[str],
-        evidence_texts: List[str],
-        top_n: int = 100,
-    ) -> List[Dict[str, Any]]:
-        """
-        Hybrid candidate retrieval for encoding judgement.
-        编码层混合候选检索：关键词匹配 + 语义近似（当前用词重叠近似）。
-        """
-        memory = self.export_full_memory(run_ctx)
-        signals = [query] + list(f_key or []) + list(evidence_texts or [])
-        signal_tokens = set()
-        for s in signals:
-            signal_tokens.update(split_tokens(str(s)))
-
-        scored: List[Dict[str, Any]] = []
-        for item in memory:
-            text = str(item.get("text", ""))
-            txt_tokens = set(split_tokens(text))
-            overlap = len(signal_tokens & txt_tokens) if signal_tokens and txt_tokens else 0
-            denom = len(signal_tokens) or 1
-            keyword_score = overlap / denom
-            # Placeholder semantic score: normalized token overlap variant.
-            semantic_score = overlap / (len(txt_tokens) or 1)
-            fusion_score = 0.6 * semantic_score + 0.4 * keyword_score
-            rec = dict(item)
-            meta = dict(rec.get("meta", {})) if isinstance(rec.get("meta", {}), dict) else {}
-            meta["hybrid_scores"] = {
-                "semantic_score": float(semantic_score),
-                "keyword_score": float(keyword_score),
-                "fusion_score": float(fusion_score),
-            }
-            rec["meta"] = meta
-            rec["_fusion_score"] = fusion_score
-            scored.append(rec)
-
-        scored.sort(key=lambda x: float(x.get("_fusion_score", 0.0)), reverse=True)
-        out = []
-        for rec in scored[: max(1, int(top_n or 1))]:
-            rec.pop("_fusion_score", None)
-            out.append(rec)
-        return out
-
     def retrieve_original(self, run_ctx: Any, query: str, top_k: int) -> List[Dict[str, Any]]:
-        # Real O-Mem path: return native retrieval payload that is fed to generation.
-        # 真实 O-Mem 路径：返回原生检索结果（用于后续生成）。
-        if self.config.use_real_omem and isinstance(run_ctx, dict):
-            retrieval_result, speaker_a, speaker_b = self._native_retrieve(run_ctx, query, top_k)
-            items: List[Dict[str, Any]] = []
-            rank = 0
-            for msg in retrieval_result.get("retrieved context messages", []) or []:
-                raw_text, timestamp = self._normalize_retrieved_message(msg)
-                text = self._format_memory_text(raw_text, timestamp=timestamp, speaker=speaker_a, role="user")
-                if not text:
-                    continue
-                items.append(
-                    {
-                        "id": f"ctx-{rank}",
-                        "text": text,
-                        "score": float(max(0.0, 1.0 - 0.01 * rank)),
-                        "meta": {
-                            "source": "omem_native_retrieval",
-                            "channel": "retrieved_context_messages",
-                            "native_rank": rank,
-                            "speaker_a": speaker_a,
-                            "speaker_b": speaker_b,
-                        },
-                    }
-                )
-                rank += 1
-
-            # Keep persona channels in C_original because O-Mem also injects them into generation prompt.
-            for i, attr in enumerate(retrieval_result.get("persona attributes", []) or []):
-                at = str(attr).strip()
-                if not at:
-                    continue
-                items.append(
-                    {
-                        "id": f"attr-{i}",
-                        "text": at,
-                        "score": 0.3,
-                        "meta": {"source": "omem_native_retrieval", "channel": "persona_attributes", "native_rank": i},
-                    }
-                )
-            for i, fact in enumerate(retrieval_result.get("persona facts", []) or []):
-                ft = str(fact).strip()
-                if not ft:
-                    continue
-                items.append(
-                    {
-                        "id": f"fact-{i}",
-                        "text": ft,
-                        "score": 0.35,
-                        "meta": {"source": "omem_native_retrieval", "channel": "persona_facts", "native_rank": i},
-                    }
-                )
-            if items:
-                return items[: max(1, int(top_k or 1))]
-
-        # Lightweight fallback path (non-real mode only).
         memory = self.export_full_memory(run_ctx)
         query_tokens = set(split_tokens(query))
         scored: List[Dict[str, Any]] = []
@@ -327,32 +222,7 @@ class OMemAdapter:
                     return str(answer[0]).strip()
         return self._oracle_fallback_answer(oracle_context, query)
 
-    def generate_online_answer(self, run_ctx: Any, query: str, top_k: int = 5) -> str:
-        return self._generate_online_answer(run_ctx, query, top_k)
-
     def _generate_online_answer(self, run_ctx: Any, query: str, top_k: int) -> str:
-        if self.config.use_real_omem and isinstance(run_ctx, dict):
-            retrieval_result, speaker_a, speaker_b = self._native_retrieve(run_ctx, query, top_k)
-            manager = run_ctx.get("memory_manager")
-            client = run_ctx.get("client")
-            if manager is None or client is None:
-                raise RuntimeError("real O-Mem run_ctx missing memory_manager/client for online generation")
-            answer = self._run_awaitable(
-                manager.generate_system_response(
-                    query=query,
-                    restrieval_result=retrieval_result,
-                    client=client,
-                    speaker_a=speaker_a,
-                    speaker_b=speaker_b,
-                    llm_model=self.config.llm_model,
-                )
-            )
-            if isinstance(answer, tuple) and answer:
-                out = str(answer[0]).strip()
-                if out:
-                    return out
-            raise RuntimeError("real O-Mem online generation returned empty answer")
-
         items = self.retrieve_original(run_ctx, query, top_k)
         if not items:
             return "I don't know"
@@ -360,51 +230,6 @@ class OMemAdapter:
         if not best:
             return "I don't know"
         return best
-
-    def _native_retrieve(self, run_ctx: Dict[str, Any], query: str, top_k: int) -> Tuple[Dict[str, Any], str, str]:
-        manager = run_ctx.get("memory_manager")
-        if manager is None:
-            raise RuntimeError("real O-Mem run_ctx missing memory_manager for native retrieval")
-
-        cache = run_ctx.setdefault("_native_retrieval_cache", {})
-        cache_key = f"{query}||{int(top_k or 1)}"
-        cached = cache.get(cache_key)
-        if isinstance(cached, dict):
-            rr = cached.get("retrieval_result")
-            sa = str(cached.get("speaker_a", run_ctx.get("user_name", "User")))
-            sb = str(cached.get("speaker_b", run_ctx.get("agent_name", "Assistant")))
-            if isinstance(rr, dict):
-                return rr, sa, sb
-
-        retrieval_result, speaker_a, speaker_b, _, _ = manager.retrieve_from_memory_soft_segmentation(
-            question=query,
-            topn=max(1, int(top_k or 1)),
-            drop_threshold=float(self.config.retrieval_drop_threshold),
-        )
-        if not isinstance(retrieval_result, dict):
-            raise RuntimeError("native O-Mem retrieval returned invalid payload")
-        if "retrieved context messages" not in retrieval_result:
-            raise RuntimeError("native O-Mem retrieval payload missing 'retrieved context messages'")
-
-        cache[cache_key] = {
-            "retrieval_result": retrieval_result,
-            "speaker_a": str(speaker_a or run_ctx.get("user_name", "User")),
-            "speaker_b": str(speaker_b or run_ctx.get("agent_name", "Assistant")),
-        }
-        return retrieval_result, str(speaker_a or run_ctx.get("user_name", "User")), str(
-            speaker_b or run_ctx.get("agent_name", "Assistant")
-        )
-
-    def _normalize_retrieved_message(self, msg: Any) -> Tuple[str, str]:
-        if isinstance(msg, (list, tuple)):
-            raw_text = str(msg[0]).strip() if len(msg) > 0 else ""
-            timestamp = str(msg[1]).strip() if len(msg) > 1 else ""
-            return raw_text, timestamp
-        if isinstance(msg, dict):
-            raw_text = str(msg.get("raw_message") or msg.get("text") or "").strip()
-            timestamp = str(msg.get("timestamp") or msg.get("time") or "").strip()
-            return raw_text, timestamp
-        return str(msg).strip(), ""
 
     def _oracle_fallback_answer(self, oracle_context: str, query: str) -> str:
         text = str(oracle_context or "").strip()

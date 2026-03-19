@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
+from dataclasses import field
 from typing import Any, Dict, List, Optional
 
 from memory_eval.eval_core.adapter_protocol import EncodingAdapterProtocol
-from memory_eval.eval_core.llm_assist import LLMAssistConfig, llm_judge_fact_match
+from memory_eval.eval_core.llm_assist import LLMAssistConfig, llm_judge_encoding_storage, llm_judge_fact_match
 from memory_eval.eval_core.models import EvalSample, EvaluatorConfig, ProbeResult
 from memory_eval.eval_core.utils import looks_ambiguous, normalize_text, text_match
 
@@ -21,6 +22,7 @@ class EncodingProbeInput:
     memory_corpus: List[Dict[str, Any]]
     f_key: List[str]
     task_type: str
+    evidence_texts: List[str] = field(default_factory=list)
 
 
 def _normalize_records(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -81,11 +83,32 @@ def evaluate_encoding_probe_with_adapter(
     """
     # 1) Get full memory corpus M from adapter / 从适配器导出全量记忆库 M
     memory_corpus = _normalize_records(adapter.export_full_memory(run_ctx))
-    # 2) Adapter-side traversal and matching / 适配器层执行脚本匹配逻辑
-    candidates = _normalize_records(adapter.find_memory_records(run_ctx, sample.question, sample.f_key, memory_corpus))
-    # 3) Evaluator fallback scan if adapter returns none / 若适配器无候选则评估层兜底
-    if not candidates and memory_corpus:
+    # 2) Optional hybrid high-recall candidates first / 可选混合高召回候选
+    candidates: List[Dict[str, Any]] = []
+    hybrid_fn = getattr(adapter, "hybrid_retrieve_candidates", None)
+    if callable(hybrid_fn):
+        try:
+            candidates = _normalize_records(
+                hybrid_fn(
+                    run_ctx=run_ctx,
+                    query=sample.question,
+                    f_key=list(sample.f_key),
+                    evidence_texts=list(sample.evidence_with_time or sample.evidence_texts),
+                    top_n=100,
+                )
+            )
+        except Exception as exc:
+            if cfg and cfg.strict_adapter_call:
+                raise RuntimeError(f"encoding hybrid_retrieve_candidates failed: {exc}") from exc
+            candidates = []
+
+    # 3) Adapter-side traversal and matching / 适配器层执行脚本匹配逻辑
+    if not candidates:
+        candidates = _normalize_records(adapter.find_memory_records(run_ctx, sample.question, sample.f_key, memory_corpus))
+    # 4) Evaluator fallback scan if adapter returns none / 若适配器无候选则评估层兜底
+    if not candidates and memory_corpus and not (cfg and cfg.disable_rule_fallback):
         candidates = _fallback_find_records(sample.question, sample.f_key, memory_corpus)
+    evidence_texts = list(getattr(sample, "evidence_with_time", []) or getattr(sample, "evidence_texts", []))
 
     return evaluate_encoding_probe(
         EncodingProbeInput(
@@ -93,6 +116,7 @@ def evaluate_encoding_probe_with_adapter(
             memory_corpus=memory_corpus,
             f_key=list(sample.f_key),
             task_type=sample.task_type,
+            evidence_texts=evidence_texts,
         ),
         candidate_records=candidates,
         cfg=cfg,
@@ -110,8 +134,51 @@ def evaluate_encoding_probe(
     """
     memory_corpus = _normalize_records(inp.memory_corpus)
     candidates = _normalize_records(candidate_records or [])
-    if not candidates and memory_corpus:
+    if not candidates and memory_corpus and not (cfg and cfg.disable_rule_fallback):
         candidates = _fallback_find_records(inp.question, inp.f_key, memory_corpus)
+
+    llm_encoding_judgement: Dict[str, Any] | None = None
+    if cfg and cfg.use_llm_assist:
+        llm_encoding_judgement = llm_judge_encoding_storage(
+            LLMAssistConfig(
+                api_key=cfg.llm_api_key,
+                base_url=cfg.llm_base_url,
+                model=cfg.llm_model,
+                temperature=cfg.llm_temperature,
+            ),
+            query=inp.question,
+            f_key=list(inp.f_key),
+            evidence_texts=list(inp.evidence_texts),
+            candidates=candidates,
+            task_type=inp.task_type,
+        )
+        if cfg.require_llm_judgement and not isinstance(llm_encoding_judgement, dict):
+            raise RuntimeError("encoding llm judgement failed or empty")
+
+    # Prefer adapter+LLM holistic storage judgement when available.
+    # 有可用的结构化 LLM 判定时优先采用（并保留规则兜底）。
+    if isinstance(llm_encoding_judgement, dict):
+        s = str(llm_encoding_judgement.get("encoding_state", "")).upper()
+        defects = [str(x).upper() for x in llm_encoding_judgement.get("defects", []) if str(x).strip()]
+        if s in {"EXIST", "MISS", "CORRUPT_AMBIG", "CORRUPT_WRONG", "DIRTY"}:
+            return ProbeResult(
+                probe="enc",
+                state=s,
+                defects=defects,
+                evidence={
+                    "reason": str(llm_encoding_judgement.get("reasoning", "LLM holistic encoding judgement.")),
+                    "memory_source": "adapter.export_full_memory",
+                    "candidate_count": len(candidates),
+                    "matched_candidate_ids": list(llm_encoding_judgement.get("matched_candidate_ids", [])),
+                    "evidence_snippets": list(llm_encoding_judgement.get("evidence_snippets", [])),
+                    "llm_encoding_judgement": llm_encoding_judgement,
+                },
+            )
+        if cfg and cfg.require_llm_judgement and cfg.disable_rule_fallback:
+            raise RuntimeError(f"encoding llm judgement returned invalid state: {s or 'EMPTY'}")
+
+    if cfg and cfg.use_llm_assist and cfg.disable_rule_fallback:
+        raise RuntimeError("encoding strict mode rejects rule fallback")
 
     # NEG definition (should abstain): if query-related memory exists, treat as DIRTY.
     # NEG 定义（应拒答）：若出现 query 相关记忆，视为污染 DIRTY。

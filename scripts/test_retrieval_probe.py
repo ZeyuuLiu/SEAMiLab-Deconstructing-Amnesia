@@ -28,7 +28,7 @@ class MockRetrievalAdapter(RetrievalAdapterProtocol):
 
 
 def run_tests() -> int:
-    cfg = EvaluatorConfig(tau_rank=3, tau_snr=0.4, neg_noise_score_threshold=0.5)
+    cfg = EvaluatorConfig(tau_rank=3, tau_snr=0.4, neg_noise_score_threshold=0.5, use_llm_assist=False)
     cases = [
         {
             "name": "pos_hit_clean",

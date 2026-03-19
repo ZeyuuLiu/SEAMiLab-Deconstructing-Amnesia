@@ -5,7 +5,7 @@ A clean-slate evaluation framework for long-term memory systems, designed with s
 1. Evaluation Core (framework-owned logic)
 2. Adapter Layer (system-specific integration)
 
-## Current Scope (Iteration 0.4.0)
+## Current Scope (Iteration 0.6.2)
 
 This iteration focuses on:
 
@@ -17,6 +17,15 @@ This iteration focuses on:
 6. Independent probe test scripts for encoding/retrieval/generation
 7. `system/` directory for baseline memory-system source code
 8. LLM assist enabled by default for all three probes
+9. Adapter-aware unified evaluator entrypoint for direct protocol integration
+10. O-Mem adapter compliance audit script and audit documentation
+11. End-to-end evaluation pipeline (`dataset -> adapter -> three probes -> report`)
+12. Bilingual real-run report of O-Mem on LOCOMO sample0
+13. Three-probe redesign implementation (hybrid + LLM-judge)
+14. Bilingual fixed adapter interface specification
+15. Strict full-path fail-fast evaluation policy (LLM-required)
+16. Registry-based per-memory-system adapter creation (`one system -> one adapter module`)
+17. O-Mem native retrieval->generation online path integration in real mode
 
 This is still a step-by-step implementation stage, not a full production pipeline.
 
@@ -152,6 +161,19 @@ print(result.to_dict())
 
 Output includes states, defect union, and evidence-by-probe blocks.
 
+Adapter-aware usage:
+
+```python
+result = evaluator.evaluate_with_adapters(
+    sample=sample,
+    run_ctx=run_ctx,
+    encoding_adapter=enc_adapter,
+    retrieval_adapter=ret_adapter,
+    generation_adapter=gen_adapter,
+    top_k=5,
+)
+```
+
 ## Encoding Probe (v0.2.1 focus)
 
 This iteration deepens encoding probe implementation with explicit adapter integration.
@@ -281,23 +303,6 @@ Example:
 The demo reads `configs/keys.local.json`.
 When `--fkey-source llm` is used, the demo invokes OpenAI-compatible `/chat/completions`.
 
-For O-Mem adapter minimal run:
-
-```powershell
-python scripts/run_omem_adapter_minimal.py --question-id "conv-26:0" --top-k 5
-```
-
-Credential loading order:
-
-1. `MEMORY_EVAL_API_KEY` / `MEMORY_EVAL_BASE_URL` (or `OPENAI_API_KEY` / `OPENAI_BASE_URL`)
-2. local file (default `configs/keys.local.json`)
-
-Real O-Mem mode can be enabled with:
-
-```powershell
-python scripts/run_omem_adapter_minimal.py --question-id "conv-26:0" --use-real-omem --keys "configs/keys.local.json"
-```
-
 ## Versioning
 
 1. Code version: `VERSION` file (SemVer)
@@ -305,7 +310,85 @@ python scripts/run_omem_adapter_minimal.py --question-id "conv-26:0" --use-real-
 3. Requirement and design traceability: `docs/traceability/`
 4. Change history: `CHANGELOG.md`
 
+## O-Mem Adapter Audit
+
+To check whether `system/O-Mem` is compliant with eval adapter protocols in this repo:
+
+```powershell
+python scripts/audit_o_mem_adapter.py
+```
+
+This script reports:
+
+1. static protocol-method compliance hits
+2. runtime importability in current environment
+3. overall readiness conclusion
+
+## Full Evaluation Pipeline
+
+Run full three-probe pipeline on LOCOMO with your adapter implementation:
+
+```powershell
+python scripts/run_eval_pipeline.py `
+  --memory-system o_mem `
+  --adapter-config-json "{\"use_real_omem\":true,\"api_key\":\"...\",\"base_url\":\"...\"}" `
+  --dataset data/locomo10.json `
+  --output outputs/eval_pipeline_results.json `
+  --limit 10
+```
+
+Or load a custom adapter class directly:
+
+```powershell
+python scripts/run_eval_pipeline.py `
+  --adapter-module your_adapter_module `
+  --adapter-class YourAdapterClass `
+  --dataset data/locomo10.json `
+  --output outputs/eval_pipeline_results.json `
+  --limit 10
+```
+
+Adapter must implement:
+
+1. `ingest_conversation(...)`
+2. `export_full_memory(...)`
+3. `find_memory_records(...)`
+4. `retrieve_original(...)`
+5. `generate_oracle_answer(...)`
+6. Recommended: `generate_online_answer(...)` (required by strict generation mode)
+
+Strict policy defaults:
+
+1. LLM judgement required for three probes (`require_llm_judgement=True`)
+2. Adapter-call errors are fail-fast (`strict_adapter_call=True`)
+3. Rule fallback disabled (`disable_rule_fallback=True`)
+4. Online answer required (`require_online_answer=True`)
+
+For debug-only relaxed runs, enable fallback flags in CLI:
+
+```powershell
+python scripts/run_eval_pipeline.py `
+  --memory-system o_mem `
+  --allow-rule-fallback `
+  --allow-adapter-fallback `
+  --allow-empty-online-answer
+```
+
+Quick smoke test (mock adapter):
+
+```powershell
+python scripts/test_eval_pipeline_mock.py
+```
+
 ## Design Docs
 
 1. `docs/architecture/three-layer-probe-implementation-plan.md`
 2. `docs/traceability/DESIGN_NOTES.md`
+3. `docs/architecture/eval-layer-final-implementation-v0.4.2.md`
+4. `docs/architecture/o-mem-adapter-compliance-audit-v0.4.2.md`
+5. `docs/architecture/o-mem-real-run-sample0-report-v0.5.2.md`
+6. `docs/architecture/three-probe-implementation-logic-bilingual-v0.6.0.md`
+7. `docs/architecture/adapter-fixed-interface-spec-bilingual-v0.6.0.md`
+8. `docs/architecture/adapter-requirements-and-fidelity-protocol-bilingual-v0.6.1.md`
+9. `docs/architecture/three-probe-framework-implementation-bilingual-v0.6.1.md`
+10. `docs/architecture/one-memory-system-full-evaluation-flow-bilingual-v0.6.2.md`

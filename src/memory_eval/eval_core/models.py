@@ -123,3 +123,9 @@ class EvaluatorConfig:
     llm_temperature: float = 0.0
     llm_api_key: str = ""
     llm_base_url: str = "https://vip.dmxapi.com/v1"
+    # Strict execution policy (default on): full-path + fail-fast.
+    # 严格执行策略（默认开启）：完整链路 + 失败即报错。
+    require_llm_judgement: bool = True
+    strict_adapter_call: bool = True
+    disable_rule_fallback: bool = True
+    require_online_answer: bool = True
