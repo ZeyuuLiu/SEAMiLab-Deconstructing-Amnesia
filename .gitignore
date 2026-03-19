@@ -25,3 +25,9 @@ configs/keys.local.json
 # IDE
 .idea/
 .vscode/
+
+# macOS
+.DS_Store   
+
+# Embeddings
+Qwen/
