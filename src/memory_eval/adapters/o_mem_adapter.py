@@ -28,7 +28,7 @@ class OMemAdapterConfig:
     episodic_memory_refresh_rate: int = 5
     omem_root: str = ""
     allow_fallback_lightweight: bool = False
-    async_call_timeout_sec: float = 120.0
+    async_call_timeout_sec: float = 180.0
 
 
 def load_runtime_credentials(keys_path: Optional[str] = None, require_complete: bool = False) -> Dict[str, str]:

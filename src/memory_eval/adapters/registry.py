@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
+from pathlib import Path
 from typing import Any, Callable, Dict
 
 from memory_eval.adapters.o_mem_adapter import OMemAdapter, OMemAdapterConfig
@@ -14,10 +15,19 @@ def _build_o_mem(raw: Dict[str, Any]) -> OMemAdapter:
     return OMemAdapter(config=cfg)
 
 
+def _build_o_mem_stable_eval(raw: Dict[str, Any]) -> OMemAdapter:
+    cfg_raw = dict(raw)
+    if not cfg_raw.get("omem_root"):
+        cfg_raw["omem_root"] = str(Path(__file__).resolve().parents[3] / "system" / "O-Mem-StableEval")
+    cfg = OMemAdapterConfig(**cfg_raw)
+    return OMemAdapter(config=cfg)
+
+
 # One memory system = one dedicated adapter implementation module.
 # 一套记忆系统 = 一份独立适配器实现模块。
 _ADAPTER_BUILDERS: Dict[str, AdapterBuilder] = {
     "o_mem": _build_o_mem,
+    "o_mem_stable_eval": _build_o_mem_stable_eval,
 }
 
 

@@ -2,6 +2,38 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.6.6] - 2026-03-24
+
+### Changed
+
+1. Increased stable O-Mem async timeout defaults for real evaluation:
+   - `OMemAdapterConfig.async_call_timeout_sec`: `120.0 -> 180.0`
+2. Increased stable smoke-run timeout to align with longer native O-Mem topic merge stages.
+
+## [0.6.5] - 2026-03-19
+
+### Added
+
+1. Preserved original `system/O-Mem` and created a parallel patched runtime:
+   - `system/O-Mem-StableEval`
+2. New adapter registry target for patched O-Mem runtime:
+   - `o_mem_stable_eval`
+3. New code-audit docs for evaluation internals and O-Mem completion review:
+   - `docs/code-audit/2026-03-19/eval-layer-bottom-up-implementation-audit.md`
+   - `docs/code-audit/2026-03-19/o-mem-adapter-completion-audit.md`
+   - `docs/code-audit/2026-03-19/o-mem-stable-eval-internal-fix-notes.md`
+
+### Changed
+
+1. Patched `system/O-Mem-StableEval/memory_chain` to remove infinite retry loops in key LLM-JSON paths.
+2. Added robust JSON parsing helpers that tolerate markdown code fences and extracted JSON substrings.
+3. Replaced open-ended retry loops in:
+   - `memory_manager.py`
+   - `episodic_memory.py`
+   - `persona_memory.py`
+   - `memory.py`
+4. Stable-eval path now uses bounded retries and explicit failure instead of endless retry-on-parse-error behavior.
+
 ## [0.6.4] - 2026-03-19
 
 ### Changed
