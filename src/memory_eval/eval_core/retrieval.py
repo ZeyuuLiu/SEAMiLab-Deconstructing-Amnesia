@@ -12,7 +12,7 @@ from memory_eval.eval_core.llm_assist import (
     llm_judge_retrieval_quality_pos,
 )
 from memory_eval.eval_core.models import EvalSample, EvaluatorConfig, ProbeResult
-from memory_eval.eval_core.utils import rank_and_hit_indices, token_overlap_snr
+from memory_eval.eval_core.utils import is_strict_llm_probe, rank_and_hit_indices, token_overlap_snr
 
 
 @dataclass(frozen=True)
@@ -80,6 +80,8 @@ def evaluate_retrieval_probe(inp: RetrievalProbeInput, cfg: EvaluatorConfig, s_e
     hit_count = len(hit_indices)
     snr, snr_meta = token_overlap_snr(items, inp.f_key)
 
+    llm_must = bool(cfg.use_llm_assist and cfg.require_llm_judgement)
+
     if inp.task_type == "NEG":
         top_score = float(items[0].get("score", 0.0)) if items else 0.0
         llm_noise_reason: Dict[str, Any] | None = None
@@ -93,12 +95,12 @@ def evaluate_retrieval_probe(inp: RetrievalProbeInput, cfg: EvaluatorConfig, s_e
                 ),
                 query=inp.question,
                 retrieved_items=items,
+                must_succeed=llm_must,
             )
+            if not isinstance(j, dict) and cfg.require_llm_judgement:
+                raise RuntimeError("retrieval NEG llm judgement failed or empty")
             if isinstance(j, dict):
                 llm_noise_reason = j
-            elif cfg.require_llm_judgement:
-                raise RuntimeError("retrieval NEG llm judgement failed or empty")
-            if isinstance(llm_noise_reason, dict):
                 state_hint = str(llm_noise_reason.get("retrieval_state", "")).upper()
                 is_noise = state_hint == "NOISE" or bool(llm_noise_reason.get("is_noise", False))
                 return ProbeResult(
@@ -118,8 +120,7 @@ def evaluate_retrieval_probe(inp: RetrievalProbeInput, cfg: EvaluatorConfig, s_e
                 raise RuntimeError("retrieval NEG strict mode rejects rule fallback")
 
         noise_by_score = top_score >= cfg.neg_noise_score_threshold
-        if not llm_noise_reason and items:
-            # Keep backward compatible lightweight LLM contract in non-strict mode.
+        if not llm_noise_reason and items and not cfg.disable_rule_fallback:
             j = llm_judge_retrieval_noise(
                 LLMAssistConfig(
                     api_key=cfg.llm_api_key,
@@ -169,6 +170,12 @@ def evaluate_retrieval_probe(inp: RetrievalProbeInput, cfg: EvaluatorConfig, s_e
             f_key=list(inp.f_key),
             evidence_texts=list(inp.evidence_texts),
             retrieved_items=items,
+            rank_index=rank,
+            hit_indices=hit_indices,
+            snr=snr,
+            tau_rank=cfg.tau_rank,
+            tau_snr=cfg.tau_snr,
+            must_succeed=llm_must,
         )
         if cfg.require_llm_judgement and not isinstance(llm_pos_judgement, dict):
             raise RuntimeError("retrieval POS llm judgement failed or empty")
@@ -177,11 +184,12 @@ def evaluate_retrieval_probe(inp: RetrievalProbeInput, cfg: EvaluatorConfig, s_e
             defects = [str(x).upper() for x in llm_pos_judgement.get("defects", []) if str(x).strip()]
             if state_hint == "MISS" and (s_enc is None or s_enc != "MISS") and "RF" not in defects:
                 defects.append("RF")
-            if state_hint in {"HIT", "MISS", "NOISE"}:
+            if not is_strict_llm_probe(cfg) and state_hint in {"HIT", "MISS", "NOISE"}:
                 if rank > cfg.tau_rank and "LATE" not in defects:
                     defects.append("LATE")
                 if snr < cfg.tau_snr and "NOI" not in defects:
                     defects.append("NOI")
+            if state_hint in {"HIT", "MISS", "NOISE"}:
                 return ProbeResult(
                     probe="ret",
                     state=state_hint,

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import re
-from typing import Dict, Iterable, List, Sequence, Set, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-from memory_eval.eval_core.models import DEFECT_ORDER
+from memory_eval.eval_core.models import DEFECT_ORDER, EvaluatorConfig
 
 
 AMBIG_TOKENS: Set[str] = {
@@ -179,3 +179,13 @@ def token_overlap_snr(
     if denom <= 0:
         return 0.0, {"c_token_count": 0, "f_token_count": len(f_set), "overlap_count": 0}
     return overlap / denom, {"c_token_count": denom, "f_token_count": len(f_set), "overlap_count": overlap}
+
+
+def is_strict_llm_probe(cfg: Optional[EvaluatorConfig]) -> bool:
+    """LLM-only probe profile: no rule fallbacks; LLM calls must succeed."""
+    return bool(
+        cfg
+        and cfg.use_llm_assist
+        and cfg.require_llm_judgement
+        and cfg.disable_rule_fallback
+    )

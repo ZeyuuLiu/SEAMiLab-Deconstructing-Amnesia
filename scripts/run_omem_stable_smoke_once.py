@@ -10,6 +10,15 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+_omem_root = str(PROJECT_ROOT / "system" / "O-Mem-StableEval")
+if _omem_root not in sys.path:
+    sys.path.insert(0, _omem_root)
+try:
+    from memory_chain._gpu_runtime import bootstrap_cuda_wheel_runtime
+    bootstrap_cuda_wheel_runtime()
+except ImportError:
+    pass
+
 from memory_eval.adapters import OMemAdapter, OMemAdapterConfig
 from memory_eval.dataset.locomo_builder import build_locomo_eval_samples
 from memory_eval.eval_core import EvaluatorConfig, ParallelThreeProbeEvaluator
@@ -28,6 +37,8 @@ def main() -> int:
     parser.add_argument("--question-index", type=int, default=0, help="Question index inside selected sample")
     parser.add_argument("--output", default="outputs/omem_stable_smoke_once.json")
     parser.add_argument("--memory-dir", default="outputs/omem_stable_smoke_once_memory")
+    parser.add_argument("--device", default="", help='Runtime device, e.g. "cuda:3" or "cpu". Empty means auto-select.')
+    parser.add_argument("--disable-auto-select-cuda", action="store_true", help="Do not auto-select the freest CUDA device.")
     args = parser.parse_args()
 
     keys = json.loads((PROJECT_ROOT / "configs" / "keys.local.json").read_text(encoding="utf-8-sig"))
@@ -60,6 +71,8 @@ def main() -> int:
             llm_model=str(keys.get("model", "gpt-4o-mini")),
             embedding_model_name=str(embedding_path),
             memory_dir=args.memory_dir,
+            device=args.device,
+            auto_select_cuda=not args.disable_auto_select_cuda,
             omem_root=str(PROJECT_ROOT / "system" / "O-Mem-StableEval"),
             async_call_timeout_sec=180.0,
         )
@@ -79,15 +92,17 @@ def main() -> int:
         tau_snr=0.2,
         neg_noise_score_threshold=0.15,
         max_workers=3,
-        use_llm_assist=False,
+        use_llm_assist=True,
         llm_model=str(keys.get("model", "gpt-4o-mini")),
         llm_temperature=0.0,
         llm_api_key=str(keys["api_key"]),
         llm_base_url=str(keys["base_url"]),
-        require_llm_judgement=False,
+        require_llm_judgement=True,
         strict_adapter_call=True,
-        disable_rule_fallback=False,
+        disable_rule_fallback=True,
         require_online_answer=True,
+        encoding_merge_native_retrieval=True,
+        encoding_native_retrieval_top_k=20,
     )
     evaluator = ParallelThreeProbeEvaluator(evaluator_cfg)
 

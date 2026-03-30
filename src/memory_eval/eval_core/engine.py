@@ -82,7 +82,15 @@ class ParallelThreeProbeEvaluator:
         适配器联通入口：评估层直接调用三类协议完成并行探针。
         """
         with ThreadPoolExecutor(max_workers=max(1, self.config.max_workers)) as pool:
-            f_enc = pool.submit(evaluate_encoding_probe_with_adapter, sample, encoding_adapter, run_ctx, self.config)
+            f_enc = pool.submit(
+                evaluate_encoding_probe_with_adapter,
+                sample,
+                encoding_adapter,
+                run_ctx,
+                self.config,
+                retrieval_adapter=retrieval_adapter,
+                top_k=top_k,
+            )
             f_ret = pool.submit(
                 evaluate_retrieval_probe_with_adapter,
                 sample,

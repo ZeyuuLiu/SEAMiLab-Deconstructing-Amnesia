@@ -750,9 +750,17 @@ class MemoryManager:
         # top_scores_2, top_indices_2 = torch.topk(similarities_2, k=min(top_k-2, len(similarities_2)))
         # top_scores_3, top_indices_3 = torch.topk(similarities_3, k=min(top_k+9, len(similarities_3)))
 
-        top_scores_1, top_indices_1 = torch.topk(similarities_1, k=min(top_k-9, len(similarities_1)))
-        top_scores_2, top_indices_2 = torch.topk(similarities_2, k=min(top_k-1, len(similarities_2)))
-        top_scores_3, top_indices_3 = torch.topk(similarities_3, k=min(top_k+8, len(similarities_3)))
+        def _safe_topk(similarities, desired_k):
+            available = len(similarities)
+            if available <= 0 or desired_k <= 0:
+                return similarities[:0], torch.empty(0, dtype=torch.long)
+            return torch.topk(similarities, k=min(int(desired_k), available))
+
+        # These offsets came from prior retrieval-allocation experiments. Clamp them
+        # so small top_k values or empty candidate groups fail soft instead of crashing.
+        top_scores_1, top_indices_1 = _safe_topk(similarities_1, top_k - 9)
+        top_scores_2, top_indices_2 = _safe_topk(similarities_2, top_k - 1)
+        top_scores_3, top_indices_3 = _safe_topk(similarities_3, top_k + 8)
         
 
 

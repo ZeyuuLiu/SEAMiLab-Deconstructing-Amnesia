@@ -5,10 +5,10 @@ import re
 from dataclasses import field
 from typing import Any, Dict, List, Optional
 
-from memory_eval.eval_core.adapter_protocol import EncodingAdapterProtocol
+from memory_eval.eval_core.adapter_protocol import EncodingAdapterProtocol, RetrievalAdapterProtocol
 from memory_eval.eval_core.llm_assist import LLMAssistConfig, llm_judge_encoding_storage, llm_judge_fact_match
 from memory_eval.eval_core.models import EvalSample, EvaluatorConfig, ProbeResult
-from memory_eval.eval_core.utils import looks_ambiguous, normalize_text, text_match
+from memory_eval.eval_core.utils import is_strict_llm_probe, looks_ambiguous, normalize_text, text_match
 
 
 @dataclass(frozen=True)
@@ -35,6 +35,30 @@ def _normalize_records(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "meta": dict(r.get("meta", {})) if isinstance(r.get("meta", {}), dict) else {},
             }
         )
+    return out
+
+
+def _encoding_merge_top_k(cfg: Optional[EvaluatorConfig], top_k: Optional[int]) -> int:
+    base = int(cfg.encoding_native_retrieval_top_k) if cfg else 20
+    if top_k is not None:
+        return max(base, int(top_k))
+    return base
+
+
+def _merge_encoding_candidates(
+    primary: List[Dict[str, Any]],
+    secondary: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    seen_norm: set[str] = set()
+    out: List[Dict[str, Any]] = []
+    for lst in (primary, secondary):
+        for r in lst:
+            t = normalize_text(str(r.get("text", "")))[:800]
+            if t and t in seen_norm:
+                continue
+            if t:
+                seen_norm.add(t)
+            out.append(r)
     return out
 
 
@@ -76,6 +100,9 @@ def evaluate_encoding_probe_with_adapter(
     adapter: EncodingAdapterProtocol,
     run_ctx: Any,
     cfg: Optional[EvaluatorConfig] = None,
+    *,
+    retrieval_adapter: Optional[RetrievalAdapterProtocol] = None,
+    top_k: Optional[int] = None,
 ) -> ProbeResult:
     """
     Encoding probe entrypoint with adapter integration.
@@ -105,6 +132,24 @@ def evaluate_encoding_probe_with_adapter(
     # 3) Adapter-side traversal and matching / 适配器层执行脚本匹配逻辑
     if not candidates:
         candidates = _normalize_records(adapter.find_memory_records(run_ctx, sample.question, sample.f_key, memory_corpus))
+    # 3b) Merge native retrieval into encoding candidates (same observation family as retrieval probe).
+    if cfg and cfg.encoding_merge_native_retrieval:
+        rk = _encoding_merge_top_k(cfg, top_k)
+        ro_fn = getattr(adapter, "retrieve_original", None)
+        if callable(ro_fn):
+            try:
+                extra = _normalize_records(ro_fn(run_ctx, sample.question, rk))
+                candidates = _merge_encoding_candidates(candidates, extra)
+            except Exception as exc:
+                if cfg.strict_adapter_call:
+                    raise RuntimeError(f"encoding merge retrieve_original (encoding adapter) failed: {exc}") from exc
+        elif retrieval_adapter is not None:
+            try:
+                extra = _normalize_records(retrieval_adapter.retrieve_original(run_ctx, sample.question, rk))
+                candidates = _merge_encoding_candidates(candidates, extra)
+            except Exception as exc:
+                if cfg.strict_adapter_call:
+                    raise RuntimeError(f"encoding merge retrieve_original (retrieval adapter) failed: {exc}") from exc
     # 4) Evaluator fallback scan if adapter returns none / 若适配器无候选则评估层兜底
     if not candidates and memory_corpus and not (cfg and cfg.disable_rule_fallback):
         candidates = _fallback_find_records(sample.question, sample.f_key, memory_corpus)
@@ -137,6 +182,46 @@ def evaluate_encoding_probe(
     if not candidates and memory_corpus and not (cfg and cfg.disable_rule_fallback):
         candidates = _fallback_find_records(inp.question, inp.f_key, memory_corpus)
 
+    strict = is_strict_llm_probe(cfg)
+    if strict:
+        if not cfg:
+            raise RuntimeError("strict LLM encoding probe requires EvaluatorConfig")
+        llm_encoding_judgement = llm_judge_encoding_storage(
+            LLMAssistConfig(
+                api_key=cfg.llm_api_key,
+                base_url=cfg.llm_base_url,
+                model=cfg.llm_model,
+                temperature=cfg.llm_temperature,
+            ),
+            query=inp.question,
+            f_key=list(inp.f_key),
+            evidence_texts=list(inp.evidence_texts),
+            candidates=candidates,
+            task_type=inp.task_type,
+            must_succeed=True,
+        )
+        if not isinstance(llm_encoding_judgement, dict):
+            raise RuntimeError("encoding llm judgement failed or empty")
+        s = str(llm_encoding_judgement.get("encoding_state", "")).upper()
+        defects = [str(x).upper() for x in llm_encoding_judgement.get("defects", []) if str(x).strip()]
+        valid = {"EXIST", "MISS", "CORRUPT_AMBIG", "CORRUPT_WRONG", "DIRTY"}
+        if s not in valid:
+            raise RuntimeError(f"encoding llm judgement returned invalid state: {s or 'EMPTY'}")
+        return ProbeResult(
+            probe="enc",
+            state=s,
+            defects=defects,
+            evidence={
+                "reason": str(llm_encoding_judgement.get("reasoning", "LLM holistic encoding judgement (strict).")),
+                "memory_source": "adapter.export_full_memory",
+                "candidate_count": len(candidates),
+                "matched_candidate_ids": list(llm_encoding_judgement.get("matched_candidate_ids", [])),
+                "evidence_snippets": list(llm_encoding_judgement.get("evidence_snippets", [])),
+                "llm_encoding_judgement": llm_encoding_judgement,
+            },
+        )
+
+    llm_must = bool(cfg and cfg.use_llm_assist and cfg.require_llm_judgement)
     llm_encoding_judgement: Dict[str, Any] | None = None
     if cfg and cfg.use_llm_assist:
         llm_encoding_judgement = llm_judge_encoding_storage(
@@ -151,6 +236,7 @@ def evaluate_encoding_probe(
             evidence_texts=list(inp.evidence_texts),
             candidates=candidates,
             task_type=inp.task_type,
+            must_succeed=llm_must,
         )
         if cfg.require_llm_judgement and not isinstance(llm_encoding_judgement, dict):
             raise RuntimeError("encoding llm judgement failed or empty")

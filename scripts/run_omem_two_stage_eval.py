@@ -14,6 +14,15 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+_omem_root = str(PROJECT_ROOT / "system" / "O-Mem-StableEval")
+if _omem_root not in sys.path:
+    sys.path.insert(0, _omem_root)
+try:
+    from memory_chain._gpu_runtime import bootstrap_cuda_wheel_runtime
+    bootstrap_cuda_wheel_runtime()
+except ImportError:
+    pass
+
 from memory_eval.adapters import OMemAdapter, OMemAdapterConfig
 from memory_eval.dataset.locomo_builder import build_locomo_eval_samples
 from memory_eval.eval_core import EvaluatorConfig, ParallelThreeProbeEvaluator
@@ -95,6 +104,7 @@ def main() -> int:
     parser.add_argument("--output", default="outputs/omem_two_stage_eval_100.json")
     parser.add_argument("--limit-questions", type=int, default=100)
     parser.add_argument("--correct-sample-count", type=int, default=20)
+    parser.add_argument("--baseline-only", action="store_true", help="Only reproduce O-Mem online QA accuracy; skip attribution phase.")
     parser.add_argument("--random-seed", type=int, default=42)
     parser.add_argument("--fkey-source", choices=["rule", "llm"], default="rule")
     parser.add_argument("--top-k", type=int, default=5)
@@ -114,6 +124,8 @@ def main() -> int:
     parser.add_argument("--retrieval-drop-threshold", type=float, default=0.1)
     parser.add_argument("--working-memory-max-size", type=int, default=20)
     parser.add_argument("--episodic-memory-refresh-rate", type=int, default=5)
+    parser.add_argument("--device", default="", help='Runtime device, e.g. "cuda:3" or "cpu". Empty means auto-select.')
+    parser.add_argument("--disable-auto-select-cuda", action="store_true", help="Do not auto-select the freest CUDA device.")
     parser.add_argument("--omem-root", default="")
     args = parser.parse_args()
 
@@ -138,6 +150,8 @@ def main() -> int:
             retrieval_drop_threshold=args.retrieval_drop_threshold,
             working_memory_max_size=args.working_memory_max_size,
             episodic_memory_refresh_rate=args.episodic_memory_refresh_rate,
+            device=args.device,
+            auto_select_cuda=not args.disable_auto_select_cuda,
             omem_root=args.omem_root,
         )
     )
@@ -206,55 +220,57 @@ def main() -> int:
 
     wrong_attribution_results: List[Dict[str, Any]] = []
     wrong_attribution_errors: List[Dict[str, Any]] = []
-    for s in incorrect_samples:
-        run_ctx = run_ctx_cache[s.sample_id]
-        try:
-            r = evaluator.evaluate_with_adapters(
-                sample=s,
-                run_ctx=run_ctx,
-                encoding_adapter=adapter,
-                retrieval_adapter=adapter,
-                generation_adapter=adapter,
-                top_k=args.top_k,
-            )
-            wrong_attribution_results.append(r.to_dict())
-        except Exception as exc:
-            wrong_attribution_errors.append(
-                {
-                    "question_id": s.question_id,
-                    "sample_id": s.sample_id,
-                    "task_type": s.task_type,
-                    "status": "EVAL_ERROR",
-                    "error_type": exc.__class__.__name__,
-                    "error_message": str(exc),
-                }
-            )
+    if not args.baseline_only:
+        for s in incorrect_samples:
+            run_ctx = run_ctx_cache[s.sample_id]
+            try:
+                r = evaluator.evaluate_with_adapters(
+                    sample=s,
+                    run_ctx=run_ctx,
+                    encoding_adapter=adapter,
+                    retrieval_adapter=adapter,
+                    generation_adapter=adapter,
+                    top_k=args.top_k,
+                )
+                wrong_attribution_results.append(r.to_dict())
+            except Exception as exc:
+                wrong_attribution_errors.append(
+                    {
+                        "question_id": s.question_id,
+                        "sample_id": s.sample_id,
+                        "task_type": s.task_type,
+                        "status": "EVAL_ERROR",
+                        "error_type": exc.__class__.__name__,
+                        "error_message": str(exc),
+                    }
+                )
 
     correct_attribution_results: List[Dict[str, Any]] = []
     correct_attribution_errors: List[Dict[str, Any]] = []
-    for s in sampled_correct:
-        run_ctx = run_ctx_cache[s.sample_id]
-        try:
-            r = evaluator.evaluate_with_adapters(
-                sample=s,
-                run_ctx=run_ctx,
-                encoding_adapter=adapter,
-                retrieval_adapter=adapter,
-                generation_adapter=adapter,
-                top_k=args.top_k,
-            )
-            correct_attribution_results.append(r.to_dict())
-        except Exception as exc:
-            correct_attribution_errors.append(
-                {
-                    "question_id": s.question_id,
-                    "sample_id": s.sample_id,
-                    "task_type": s.task_type,
-                    "status": "EVAL_ERROR",
-                    "error_type": exc.__class__.__name__,
-                    "error_message": str(exc),
-                }
-            )
+    if not args.baseline_only:
+        for s in sampled_correct:
+            run_ctx = run_ctx_cache[s.sample_id]
+            try:
+                r = evaluator.evaluate_with_adapters(
+                    sample=s,
+                    run_ctx=run_ctx,
+                    encoding_adapter=adapter,
+                    retrieval_adapter=adapter,
+                    generation_adapter=adapter,
+                    top_k=args.top_k,
+                )
+                correct_attribution_results.append(r.to_dict())
+            except Exception as exc:
+                correct_attribution_errors.append(
+                    {
+                        "question_id": s.question_id,
+                        "sample_id": s.sample_id,
+                        "task_type": s.task_type,
+                        "status": "EVAL_ERROR",
+                        "error_type": exc.__class__.__name__,
+                        "error_message": str(exc),
+                    }
+                )
 
     total = len(baseline_rows)
     correct_n = sum(1 for x in baseline_rows if x.get("correct", False))
@@ -265,6 +281,7 @@ def main() -> int:
             "dataset": str(dataset_path),
             "limit_questions": args.limit_questions,
             "correct_sample_count": args.correct_sample_count,
+            "baseline_only": bool(args.baseline_only),
             "random_seed": args.random_seed,
             "fkey_source": args.fkey_source,
             "top_k": args.top_k,
@@ -283,6 +300,8 @@ def main() -> int:
                 "retrieval_drop_threshold": args.retrieval_drop_threshold,
                 "working_memory_max_size": args.working_memory_max_size,
                 "episodic_memory_refresh_rate": args.episodic_memory_refresh_rate,
+                "device": args.device,
+                "auto_select_cuda": not args.disable_auto_select_cuda,
                 "memory_dir": args.memory_dir,
                 "omem_root": args.omem_root,
                 "use_real_omem": True,
@@ -298,6 +317,7 @@ def main() -> int:
         },
         "baseline_rows": baseline_rows,
         "phase2_plan": {
+            "enabled": not args.baseline_only,
             "incorrect_count": len(incorrect_samples),
             "sampled_correct_count": len(sampled_correct),
             "sampled_correct_question_ids": [s.question_id for s in sampled_correct],
@@ -322,8 +342,11 @@ def main() -> int:
     print("Two-stage O-Mem evaluation finished.")
     print(f"Output: {out}")
     print(f"Baseline accuracy: {acc:.4f} ({correct_n}/{total})")
-    print(f"Incorrect subset attributed: {len(wrong_attribution_results)} ok, {len(wrong_attribution_errors)} errors")
-    print(f"Sampled correct subset attributed: {len(correct_attribution_results)} ok, {len(correct_attribution_errors)} errors")
+    if args.baseline_only:
+        print("Attribution phase skipped (--baseline-only).")
+    else:
+        print(f"Incorrect subset attributed: {len(wrong_attribution_results)} ok, {len(wrong_attribution_errors)} errors")
+        print(f"Sampled correct subset attributed: {len(correct_attribution_results)} ok, {len(correct_attribution_errors)} errors")
     return 0
 
 

@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +30,8 @@ class OMemAdapterConfig:
     omem_root: str = ""
     allow_fallback_lightweight: bool = False
     async_call_timeout_sec: float = 180.0
+    device: str = ""
+    auto_select_cuda: bool = True
 
 
 def load_runtime_credentials(keys_path: Optional[str] = None, require_complete: bool = False) -> Dict[str, str]:
@@ -486,6 +489,38 @@ class OMemAdapter:
             return Path(configured).resolve()
         return Path(__file__).resolve().parents[3] / "system" / "O-Mem"
 
+    def _select_runtime_device(self, torch_mod: Any) -> str:
+        configured = str(self.config.device or "").strip()
+        if configured:
+            return configured
+        if not bool(getattr(torch_mod.cuda, "is_available", lambda: False)()):
+            return "cpu"
+        if not self.config.auto_select_cuda:
+            return "cuda"
+        try:
+            proc = subprocess.run(
+                [
+                    "nvidia-smi",
+                    "--query-gpu=index,memory.free,utilization.gpu",
+                    "--format=csv,noheader,nounits",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            rows: List[Tuple[int, int, int]] = []
+            for line in proc.stdout.splitlines():
+                parts = [x.strip() for x in line.split(",")]
+                if len(parts) != 3:
+                    continue
+                rows.append((int(parts[0]), int(parts[1]), int(parts[2])))
+            if rows:
+                rows.sort(key=lambda x: (x[1], -x[2]), reverse=True)
+                return f"cuda:{rows[0][0]}"
+        except Exception:
+            pass
+        return "cuda"
+
     def _ingest_real(self, sample_id: str, turns: List[Dict[str, Any]]) -> Dict[str, Any]:
         if not self.config.api_key or not self.config.base_url:
             raise ValueError("启用真实 O-Mem 模式时必须提供 api_key 与 base_url。")
@@ -504,8 +539,14 @@ class OMemAdapter:
         memory_dir = str((Path(self.config.memory_dir) / sample_id).resolve())
         Path(memory_dir).mkdir(parents=True, exist_ok=True)
         client = AsyncOpenAI(base_url=self.config.base_url, api_key=self.config.api_key)
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        embedding_model = SentenceTransformer(self.config.embedding_model_name).to(device)
+        device = self._select_runtime_device(torch)
+        if str(device).startswith("cuda:"):
+            torch.cuda.set_device(int(str(device).split(":", 1)[1]))
+        embedding_path = Path(str(self.config.embedding_model_name))
+        st_kwargs: Dict[str, Any] = {}
+        if embedding_path.exists():
+            st_kwargs["local_files_only"] = True
+        embedding_model = SentenceTransformer(self.config.embedding_model_name, device=device, **st_kwargs)
         cmd_args = SimpleNamespace(
             working_memory_max_size=int(self.config.working_memory_max_size),
             episodic_memory_refresh_rate=int(self.config.episodic_memory_refresh_rate),
@@ -551,6 +592,7 @@ class OMemAdapter:
             "client": client,
             "user_name": user_name,
             "agent_name": agent_name,
+            "runtime_device": device,
         }
 
     def _collect_omem_memory(self, memory_system: Any) -> List[Dict[str, Any]]:

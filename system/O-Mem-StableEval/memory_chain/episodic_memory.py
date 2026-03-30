@@ -129,7 +129,18 @@ class Episodic_Memory:
             for group_name in current_results["Grouped Topics"].keys():
                 current_dict_result = {}
                 current_dict_result["group_name"] =  group_name
+                valid_events = []
+                skipped_events = []
                 for event in current_results["Grouped Topics"][group_name]:
+                    if event in self.event_episodic_memory_dict:
+                        valid_events.append(event)
+                    else:
+                        skipped_events.append(event)
+                if skipped_events:
+                    print(f"[StableEval] Skip unknown grouped topics for '{group_name}': {skipped_events}")
+                if not valid_events:
+                    continue
+                for event in valid_events:
                     current_dict_result[event] = self.event_episodic_memory_dict[event]
                 pattern = r"The (\d+) round (?:attitude|message):.*?(Positive|Negative)"
                 result = {}

@@ -28,6 +28,7 @@ class EvalSample:
     task_type: str  # POS | NEG
     f_key: List[str]
     oracle_context: str
+    category: int = 0  # LoCoMo category: 1=multi-hop, 2=temporal, 3=open, 4=single-hop, 5=adversarial
     evidence_ids: List[str] = field(default_factory=list)
     evidence_texts: List[str] = field(default_factory=list)
     evidence_with_time: List[str] = field(default_factory=list)
@@ -129,3 +130,6 @@ class EvaluatorConfig:
     strict_adapter_call: bool = True
     disable_rule_fallback: bool = True
     require_online_answer: bool = True
+    # Encoding: merge native retrieval into LLM candidate set (observation alignment).
+    encoding_merge_native_retrieval: bool = True
+    encoding_native_retrieval_top_k: int = 20

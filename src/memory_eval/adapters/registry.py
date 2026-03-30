@@ -4,10 +4,24 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict
 
+from memory_eval.adapters.membox_adapter import MemboxAdapter, MemboxAdapterConfig
 from memory_eval.adapters.o_mem_adapter import OMemAdapter, OMemAdapterConfig
 
 
 AdapterBuilder = Callable[[Dict[str, Any]], Any]
+
+
+def _build_membox(raw: Dict[str, Any]) -> MemboxAdapter:
+    cfg = MemboxAdapterConfig(**raw)
+    return MemboxAdapter(config=cfg)
+
+
+def _build_membox_stable_eval(raw: Dict[str, Any]) -> MemboxAdapter:
+    cfg_raw = dict(raw)
+    if not cfg_raw.get("membox_root"):
+        cfg_raw["membox_root"] = str(Path(__file__).resolve().parents[3] / "system" / "Membox_stableEval")
+    cfg = MemboxAdapterConfig(**cfg_raw)
+    return MemboxAdapter(config=cfg)
 
 
 def _build_o_mem(raw: Dict[str, Any]) -> OMemAdapter:
@@ -26,6 +40,8 @@ def _build_o_mem_stable_eval(raw: Dict[str, Any]) -> OMemAdapter:
 # One memory system = one dedicated adapter implementation module.
 # 一套记忆系统 = 一份独立适配器实现模块。
 _ADAPTER_BUILDERS: Dict[str, AdapterBuilder] = {
+    "membox": _build_membox,
+    "membox_stable_eval": _build_membox_stable_eval,
     "o_mem": _build_o_mem,
     "o_mem_stable_eval": _build_o_mem_stable_eval,
 }

@@ -6,7 +6,7 @@ from typing import Any, Dict
 from memory_eval.eval_core.adapter_protocol import GenerationAdapterProtocol
 from memory_eval.eval_core.llm_assist import LLMAssistConfig, llm_judge_generation_answer, llm_judge_generation_comparison
 from memory_eval.eval_core.models import EvalSample, EvaluatorConfig, ProbeResult
-from memory_eval.eval_core.utils import grounding_overlap, is_abstain, normalize_text
+from memory_eval.eval_core.utils import grounding_overlap, is_abstain, is_strict_llm_probe, normalize_text
 
 
 @dataclass(frozen=True)
@@ -78,12 +78,19 @@ def evaluate_generation_probe(inp: GenerationProbeInput, cfg: EvaluatorConfig) -
     2) compare A_oracle and A_gold (rule or LLM judge)
     纯生成探针逻辑：先拿 A_oracle，再与 A_gold 比较。
     """
+    strict = is_strict_llm_probe(cfg)
     llm_judgement: Dict[str, Any] | None = None
     llm_comparison: Dict[str, Any] | None = None
-    correct = _is_correct_rule(inp)
-    online_norm = normalize_text(inp.answer_online)
-    gold_norm = normalize_text(inp.answer_gold)
-    online_correct = bool(gold_norm) and (online_norm == gold_norm or gold_norm in online_norm)
+    if strict:
+        correct = False
+        online_correct = False
+    else:
+        correct = _is_correct_rule(inp)
+        online_norm = normalize_text(inp.answer_online)
+        gold_norm = normalize_text(inp.answer_gold)
+        online_correct = bool(gold_norm) and (online_norm == gold_norm or gold_norm in online_norm)
+
+    llm_must = bool(cfg.use_llm_assist and cfg.require_llm_judgement)
 
     if cfg.use_llm_assist:
         llm_judgement = llm_judge_generation_answer(
@@ -98,6 +105,7 @@ def evaluate_generation_probe(inp: GenerationProbeInput, cfg: EvaluatorConfig) -
             answer_oracle=inp.answer_oracle,
             answer_gold=inp.answer_gold,
             task_type=inp.task_type,
+            must_succeed=llm_must,
         )
         if cfg.require_llm_judgement and not isinstance(llm_judgement, dict):
             raise RuntimeError("generation llm answer judgement failed or empty")
@@ -116,6 +124,7 @@ def evaluate_generation_probe(inp: GenerationProbeInput, cfg: EvaluatorConfig) -
             answer_online=inp.answer_online,
             answer_oracle=inp.answer_oracle,
             oracle_context=inp.oracle_context,
+            must_succeed=llm_must,
         )
         if cfg.require_llm_judgement and not isinstance(llm_comparison, dict):
             raise RuntimeError("generation llm comparison judgement failed or empty")
@@ -158,6 +167,40 @@ def evaluate_generation_probe(inp: GenerationProbeInput, cfg: EvaluatorConfig) -
         )
 
     # FAIL classification
+    if strict and inp.task_type == "NEG":
+        strict_neg_defects = []
+        if isinstance(llm_comparison, dict):
+            strict_neg_defects = [str(x).upper() for x in llm_comparison.get("defects", []) if str(x).strip()]
+        sub = str((llm_judgement or {}).get("substate", "")).upper()
+        if sub == "GH" and "GH" not in strict_neg_defects:
+            strict_neg_defects.append("GH")
+        if "GH" not in strict_neg_defects:
+            raise RuntimeError(
+                "generation strict mode: NEG failure requires GH from LLM judgement/comparison, "
+                f"got substate={sub!r}, defects={strict_neg_defects!r}"
+            )
+        return ProbeResult(
+            probe="gen",
+            state="FAIL",
+            defects=["GH"],
+            attrs={"grounding_overlap": overlap},
+            evidence={
+                "reason": "LLM-only NEG hallucination decision (strict).",
+                "answer_online": inp.answer_online,
+                "answer_oracle": inp.answer_oracle,
+                "answer_gold": inp.answer_gold,
+                "online_correct": online_correct,
+                "oracle_correct": False,
+                "comparative_judgement": (
+                    llm_comparison.get("comparative_judgement", {})
+                    if isinstance(llm_comparison, dict)
+                    else {}
+                ),
+                "llm_judgement": llm_judgement,
+                "llm_comparison": llm_comparison,
+            },
+        )
+
     if inp.task_type == "NEG":
         return ProbeResult(
             probe="gen",
@@ -182,6 +225,36 @@ def evaluate_generation_probe(inp: GenerationProbeInput, cfg: EvaluatorConfig) -
         )
 
     # POS fail => GF or GRF
+    if strict and inp.task_type == "POS":
+        sub = str((llm_judgement or {}).get("substate", "")).upper()
+        if sub not in {"GF", "GRF"}:
+            raise RuntimeError(
+                "generation strict mode: POS failure requires llm_judgement.substate in {GF, GRF}, "
+                f"got {sub!r}; llm_judgement={llm_judgement!r}"
+            )
+        return ProbeResult(
+            probe="gen",
+            state="FAIL",
+            defects=[sub],
+            attrs={"grounding_overlap": overlap},
+            evidence={
+                "reason": "LLM-only subtype decision (strict).",
+                "answer_online": inp.answer_online,
+                "answer_oracle": inp.answer_oracle,
+                "answer_gold": inp.answer_gold,
+                "online_correct": online_correct,
+                "oracle_correct": False,
+                "comparative_judgement": (
+                    llm_comparison.get("comparative_judgement", {})
+                    if isinstance(llm_comparison, dict)
+                    else {}
+                ),
+                "llm_judgement": llm_judgement,
+                "llm_comparison": llm_comparison,
+                "overlap_meta": overlap_meta,
+            },
+        )
+
     if isinstance(llm_judgement, dict):
         sub = str(llm_judgement.get("substate", "")).upper()
         if sub in {"GF", "GRF"}:

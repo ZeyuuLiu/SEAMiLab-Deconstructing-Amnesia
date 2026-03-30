@@ -26,6 +26,7 @@ class LocomoEvalSample:
     evidence_ids: List[str]
     evidence_texts: List[str]
     evidence_with_time: List[str]
+    category: int = 0  # LoCoMo: 1=multi-hop, 2=temporal, 3=open, 4=single-hop, 5=adversarial
     construction_evidence: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -44,6 +45,7 @@ class LocomoEvalSample:
             task_type=self.task_type,
             f_key=list(self.f_key),
             oracle_context=self.oracle_context,
+            category=self.category,
             evidence_ids=list(self.evidence_ids),
             evidence_texts=list(self.evidence_texts),
             evidence_with_time=list(self.evidence_with_time),
@@ -193,6 +195,7 @@ def build_locomo_eval_samples(
             answer_gold = _normalize_answer(qa.get("answer", ""))
             evidence_ids = [str(x).strip() for x in qa.get("evidence", []) if str(x).strip()]
             task_type = _infer_task_type(answer_gold)
+            category = int(qa.get("category", 0))
 
             evidence_texts, evidence_with_time, oracle_context = _build_from_evidence(evidence_ids, utt_map)
             extractor = f_key_extractor or _default_f_key_extractor
@@ -221,6 +224,7 @@ def build_locomo_eval_samples(
                 evidence_ids=evidence_ids,
                 evidence_texts=evidence_texts,
                 evidence_with_time=evidence_with_time,
+                category=category,
                 construction_evidence={
                     "mode": construction_mode,
                     "evidence_count": len(evidence_ids),
