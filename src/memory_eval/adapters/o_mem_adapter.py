@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import os
 import re
 import subprocess
 import sys
@@ -11,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
+from memory_eval.adapters.base import BaseMemoryAdapter, load_runtime_credentials
 from memory_eval.eval_core.models import AdapterTrace, RetrievedItem
 from memory_eval.eval_core.utils import normalize_text, split_tokens, text_match
 
@@ -21,6 +20,7 @@ class OMemAdapterConfig:
     api_key: str = ""
     base_url: str = ""
     llm_model: str = "gpt-4o-mini"
+    keys_path: str = ""
     embedding_model_name: str = "all-MiniLM-L6-v2"
     memory_dir: str = "outputs/omem_memory"
     retrieval_pieces: int = 15
@@ -33,46 +33,41 @@ class OMemAdapterConfig:
     device: str = ""
     auto_select_cuda: bool = True
 
+class OMemAdapter(BaseMemoryAdapter):
+    family = "o_mem"
 
-def load_runtime_credentials(keys_path: Optional[str] = None, require_complete: bool = False) -> Dict[str, str]:
-    path_api_key = ""
-    path_base_url = ""
-    path_model = ""
-    if keys_path:
-        p = Path(keys_path)
-        if p.exists():
-            raw = json.loads(p.read_text(encoding="utf-8-sig"))
-            path_api_key = str(raw.get("api_key", "")).strip()
-            path_base_url = str(raw.get("base_url", "")).strip()
-            path_model = str(raw.get("model", "")).strip()
-
-    api_key = (
-        os.getenv("MEMORY_EVAL_API_KEY", "").strip()
-        or os.getenv("OPENAI_API_KEY", "").strip()
-        or path_api_key
-    )
-    base_url = (
-        os.getenv("MEMORY_EVAL_BASE_URL", "").strip()
-        or os.getenv("OPENAI_BASE_URL", "").strip()
-        or path_base_url
-    )
-    model = os.getenv("MEMORY_EVAL_MODEL", "").strip() or path_model
-
-    if require_complete and (not api_key or not base_url):
-        raise ValueError(
-            "缺少 API 凭据：请设置 MEMORY_EVAL_API_KEY/MEMORY_EVAL_BASE_URL（或 OPENAI_API_KEY/OPENAI_BASE_URL），"
-            "或提供本地 keys 文件。"
-        )
-    return {"api_key": api_key, "base_url": base_url, "model": model}
-
-
-class OMemAdapter:
     def __init__(self, config: Optional[OMemAdapterConfig] = None):
-        self.config = config or OMemAdapterConfig()
+        super().__init__()
+        cfg = config or OMemAdapterConfig()
+        creds = self.merge_runtime_credentials(
+            api_key=cfg.api_key,
+            base_url=cfg.base_url,
+            model=cfg.llm_model,
+            keys_path=cfg.keys_path,
+            require_complete=False,
+        )
+        self.config = OMemAdapterConfig(
+            use_real_omem=cfg.use_real_omem,
+            api_key=creds["api_key"],
+            base_url=creds["base_url"],
+            llm_model=creds["model"] or cfg.llm_model,
+            keys_path=creds["keys_path"],
+            embedding_model_name=cfg.embedding_model_name,
+            memory_dir=cfg.memory_dir,
+            retrieval_pieces=cfg.retrieval_pieces,
+            retrieval_drop_threshold=cfg.retrieval_drop_threshold,
+            working_memory_max_size=cfg.working_memory_max_size,
+            episodic_memory_refresh_rate=cfg.episodic_memory_refresh_rate,
+            omem_root=cfg.omem_root,
+            allow_fallback_lightweight=cfg.allow_fallback_lightweight,
+            async_call_timeout_sec=cfg.async_call_timeout_sec,
+            device=cfg.device,
+            auto_select_cuda=cfg.auto_select_cuda,
+        )
         self._omem_root = self._resolve_omem_root(self.config.omem_root)
 
     def ingest_conversation(self, sample_id: str, conversation: List[Dict[str, Any]]) -> Any:
-        turns = self._normalize_turns(conversation)
+        turns = self.normalize_turns(conversation)
         if self.config.use_real_omem:
             try:
                 return self._ingest_real(sample_id, turns)
@@ -92,6 +87,22 @@ class OMemAdapter:
             "memory_view": self._build_memory_from_turns(turns),
             "mode": "lightweight",
         }
+
+    def capabilities(self) -> Dict[str, Any]:
+        out = super().capabilities()
+        out.update(
+            {
+                "flavor": "stable_eval" if "stableeval" in str(self._omem_root).lower() else "original",
+                "supports_full_memory_export": True,
+                "supports_native_retrieval": True,
+                "supports_oracle_generation": True,
+                "supports_online_generation": True,
+                "supports_high_recall_candidates": True,
+                "supports_real_native_runtime": True,
+                "supports_lightweight_fallback": True,
+            }
+        )
+        return out
 
     def build_trace_for_query(self, run_ctx: Any, query: str, oracle_context: str, top_k: int) -> AdapterTrace:
         memory_view = self.export_full_memory(run_ctx)
@@ -443,24 +454,6 @@ class OMemAdapter:
             out.append([message, left.strip()])
         return out
 
-    def _normalize_turns(self, conversation: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        out: List[Dict[str, Any]] = []
-        for idx, turn in enumerate(conversation):
-            speaker = str(turn.get("speaker") or turn.get("role") or "UNKNOWN").strip()
-            text = str(turn.get("text") or turn.get("content") or "").strip()
-            timestamp = str(turn.get("timestamp") or turn.get("time") or "").strip()
-            if not text:
-                continue
-            out.append(
-                {
-                    "turn_index": int(turn.get("turn_index", idx)),
-                    "speaker": speaker,
-                    "text": text,
-                    "timestamp": timestamp,
-                }
-            )
-        return out
-
     def _build_memory_from_turns(self, turns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         for turn in turns:
@@ -534,8 +527,8 @@ class OMemAdapter:
         from sentence_transformers import SentenceTransformer  # type: ignore
         import torch  # type: ignore
 
-        user_name = self._guess_user_name(turns)
-        agent_name = self._guess_agent_name(turns, user_name)
+        user_name = self.guess_user_name(turns)
+        agent_name = self.guess_agent_name(turns, user_name)
         memory_dir = str((Path(self.config.memory_dir) / sample_id).resolve())
         Path(memory_dir).mkdir(parents=True, exist_ok=True)
         client = AsyncOpenAI(base_url=self.config.base_url, api_key=self.config.api_key)
@@ -543,10 +536,14 @@ class OMemAdapter:
         if str(device).startswith("cuda:"):
             torch.cuda.set_device(int(str(device).split(":", 1)[1]))
         embedding_path = Path(str(self.config.embedding_model_name))
-        st_kwargs: Dict[str, Any] = {}
-        if embedding_path.exists():
-            st_kwargs["local_files_only"] = True
-        embedding_model = SentenceTransformer(self.config.embedding_model_name, device=device, **st_kwargs)
+        embedding_name = str(embedding_path.resolve()) if embedding_path.exists() else self.config.embedding_model_name
+        try:
+            embedding_model = SentenceTransformer(embedding_name, device=device)
+        except Exception as exc:
+            raise RuntimeError(
+                f"无法加载 O-Mem embedding 模型: {embedding_name}. "
+                "请提供可离线加载的本地模型路径，或修复当前 sentence-transformers/transformers 依赖。"
+            ) from exc
         cmd_args = SimpleNamespace(
             working_memory_max_size=int(self.config.working_memory_max_size),
             episodic_memory_refresh_rate=int(self.config.episodic_memory_refresh_rate),
@@ -655,20 +652,6 @@ class OMemAdapter:
         ):
             memory_system.agent_topic_message_dict[message["topics"]] = [message["raw_message"], message["timestamp"]]
         memory_system.generate_memory_detail_map()
-
-    def _guess_user_name(self, turns: List[Dict[str, Any]]) -> str:
-        for turn in turns:
-            name = str(turn.get("speaker", "")).strip()
-            if name:
-                return name
-        return "User"
-
-    def _guess_agent_name(self, turns: List[Dict[str, Any]], user_name: str) -> str:
-        for turn in turns:
-            name = str(turn.get("speaker", "")).strip()
-            if name and name != user_name:
-                return name
-        return "Assistant"
 
     def _run_awaitable(self, awaitable: Any, timeout_sec: float | None = None) -> Any:
         wrapped = asyncio.wait_for(awaitable, timeout=float(timeout_sec)) if timeout_sec else awaitable

@@ -280,6 +280,7 @@ Answer:"""
         cls.BUILD_TRACE_FILE = os.path.join(cls.OUTPUT_DIR, "trace_build_process.jsonl")
         cls.TIME_TRACE_FILE = os.path.join(cls.OUTPUT_DIR, "time_traces.jsonl")
         cls.TRACE_PROMPT_LOG_FILE = os.path.join(cls.OUTPUT_DIR, "trace_prompts.jsonl")
+        cls.TRACE_STATS_FILE = os.path.join(cls.OUTPUT_DIR, "trace_stats.jsonl")
         cls.BUILD_STATS_FILE = os.path.join(cls.OUTPUT_DIR, "build_stats.jsonl")
         cls.GEN_SUMMARY_FILE = os.path.join(cls.OUTPUT_DIR, "generation_metrics_summary.jsonl")
         os.makedirs(cls.OUTPUT_DIR, exist_ok=True)

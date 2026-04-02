@@ -465,6 +465,25 @@ conda run --no-capture-output -n omem-paper100 python -u scripts/run_membox_loco
 ' > /home/4T/liuzeyu/memory-eval/SEAMiLab-Deconstructing-Amnesia/outputs/logs/membox_baseline_conv26_all.log 2>&1 & echo $! > /home/4T/liuzeyu/memory-eval/SEAMiLab-Deconstructing-Amnesia/outputs/logs/membox_baseline_conv26_all.pid
 ```
 
+### 11.5.1 Membox：sample0 全题 **三探针归因**（`conv-26`，约 199 题）
+
+读 `configs/keys.local.json`；embedding 走 API（默认 `text-embedding-3-small`，可用 `--embedding-model` 覆盖）。
+
+**输出**：`outputs/membox_attr_conv26_all.json`
+
+```bash
+nohup bash -lc '
+cd /home/4T/liuzeyu/memory-eval/SEAMiLab-Deconstructing-Amnesia && \
+conda run --no-capture-output -n omem-paper100 python -u scripts/run_membox_sample_attribution.py \
+  --sample-id conv-26 \
+  --membox-root system/Membox_stableEval \
+  --output outputs/membox_attr_conv26_all.json \
+  --memory-dir outputs/membox_attr_conv26_all_memory
+' > /home/4T/liuzeyu/memory-eval/SEAMiLab-Deconstructing-Amnesia/outputs/logs/membox_attr_conv26_all.log 2>&1 & echo $! > /home/4T/liuzeyu/memory-eval/SEAMiLab-Deconstructing-Amnesia/outputs/logs/membox_attr_conv26_all.pid
+```
+
+更完整的 Membox 说明见：`docs/code-audit/2026-03-29/membox-locomo-repro-and-eval-zh.md`。
+
 ### 11.6 Membox：单题 smoke（验证 fork 是否可跑）
 
 ```bash

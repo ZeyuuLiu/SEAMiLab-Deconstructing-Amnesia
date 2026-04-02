@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from memory_eval.adapters.base import BaseMemoryAdapter
 from memory_eval.eval_core.models import AdapterTrace, RetrievedItem
 from memory_eval.eval_core.utils import normalize_text, split_tokens, text_match
 
@@ -18,6 +19,7 @@ class MemboxAdapterConfig:
     base_url: str = ""
     llm_model: str = "gpt-4o-mini"
     embedding_model: str = "text-embedding-3-small"
+    keys_path: str = ""
     membox_root: str = ""
     memory_dir: str = "outputs/membox_memory"
     run_id_prefix: str = "membox"
@@ -26,16 +28,49 @@ class MemboxAdapterConfig:
     text_modes: Optional[List[str]] = None
 
 
-class MemboxAdapter:
+class MemboxAdapter(BaseMemoryAdapter):
+    family = "membox"
+
     def __init__(self, config: Optional[MemboxAdapterConfig] = None):
-        self.config = config or MemboxAdapterConfig()
+        super().__init__()
+        cfg = config or MemboxAdapterConfig()
+        creds = self.merge_runtime_credentials(
+            api_key=cfg.api_key,
+            base_url=cfg.base_url,
+            model=cfg.llm_model,
+            keys_path=cfg.keys_path,
+            require_complete=False,
+        )
+        self.config = MemboxAdapterConfig(
+            api_key=creds["api_key"],
+            base_url=creds["base_url"],
+            llm_model=creds["model"] or cfg.llm_model,
+            embedding_model=cfg.embedding_model,
+            keys_path=creds["keys_path"],
+            membox_root=cfg.membox_root,
+            memory_dir=cfg.memory_dir,
+            run_id_prefix=cfg.run_id_prefix,
+            top_k_retrieve=cfg.top_k_retrieve,
+            answer_top_n=cfg.answer_top_n,
+            text_modes=cfg.text_modes,
+        )
         self._membox_root = self._resolve_membox_root(self.config.membox_root)
         self._module = self._load_membox_module()
 
     def ingest_conversation(self, sample_id: str, conversation: List[Dict[str, Any]]) -> Any:
-        turns = self._normalize_turns(conversation)
+        if not str(self.config.api_key or "").strip():
+            raise RuntimeError(
+                "MemboxAdapter: api_key is empty. Set MemboxAdapterConfig.api_key or "
+                "configs/keys.local.json (or env MEMORY_EVAL_API_KEY / OPENAI_API_KEY)."
+            )
+        if not str(self.config.base_url or "").strip():
+            raise RuntimeError(
+                "MemboxAdapter: base_url is empty. Set MemboxAdapterConfig.base_url or "
+                "configs/keys.local.json (or env MEMORY_EVAL_BASE_URL / OPENAI_BASE_URL)."
+            )
+        turns = self.normalize_turns(conversation)
         conv_payload = self._to_membox_conversation(turns)
-        run_id = self._build_run_id(sample_id)
+        run_id = self.build_run_id(self.config.run_id_prefix, sample_id)
         output_root = (Path(self.config.memory_dir) / sample_id).resolve()
         output_root.mkdir(parents=True, exist_ok=True)
         raw_data_path = output_root / "raw_data.json"
@@ -88,6 +123,21 @@ class MemboxAdapter:
                 "time_trace_file": cfg.TIME_TRACE_FILE,
             },
         }
+
+    def capabilities(self) -> Dict[str, Any]:
+        out = super().capabilities()
+        out.update(
+            {
+                "flavor": "stable_eval" if "stableeval" in str(self._membox_root).lower() else "original",
+                "supports_full_memory_export": True,
+                "supports_native_retrieval": True,
+                "supports_oracle_generation": True,
+                "supports_online_generation": True,
+                "supports_high_recall_candidates": True,
+                "requires_remote_llm": True,
+            }
+        )
+        return out
 
     def build_trace_for_query(self, run_ctx: Any, query: str, oracle_context: str, top_k: int) -> AdapterTrace:
         memory_view = self.export_full_memory(run_ctx)
@@ -260,15 +310,10 @@ class MemboxAdapter:
         ordered = rankings.get("content_event_topic_kw", []) or []
         return [{"id": f"box-{bid}", "score": float(sim_map.get(bid, -1.0)), "box_id": bid} for bid in ordered]
 
-    def _build_run_id(self, sample_id: str) -> str:
-        prefix = normalize_text(self.config.run_id_prefix or "membox").replace(" ", "_")
-        sid = normalize_text(sample_id).replace(" ", "_")
-        return f"{prefix}_{sid}"[:80]
-
     def _resolve_membox_root(self, configured: str) -> Path:
         if configured:
             return Path(configured).resolve()
-        return Path(__file__).resolve().parents[3] / "system" / "Membox"
+        return Path(__file__).resolve().parents[3] / "system" / "Membox_stableEval"
 
     def _load_membox_module(self):
         module_path = self._membox_root / "membox.py"
@@ -282,25 +327,9 @@ class MemboxAdapter:
         spec.loader.exec_module(mod)
         return mod
 
-    def _normalize_turns(self, conversation: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        out: List[Dict[str, Any]] = []
-        for idx, turn in enumerate(conversation):
-            text = str(turn.get("text") or turn.get("content") or "").strip()
-            if not text:
-                continue
-            out.append(
-                {
-                    "turn_index": int(turn.get("turn_index", idx)),
-                    "speaker": str(turn.get("speaker") or turn.get("role") or "UNKNOWN").strip(),
-                    "text": text,
-                    "timestamp": str(turn.get("timestamp") or turn.get("time") or "").strip(),
-                }
-            )
-        return out
-
     def _to_membox_conversation(self, turns: List[Dict[str, Any]]) -> Dict[str, Any]:
-        speaker_a = self._guess_user_name(turns)
-        speaker_b = self._guess_agent_name(turns, speaker_a)
+        speaker_a = self.guess_user_name(turns)
+        speaker_b = self.guess_agent_name(turns, speaker_a)
         sessions: Dict[str, List[Dict[str, Any]]] = {}
         session_ts: Dict[str, str] = {}
         for turn in turns:
@@ -325,21 +354,3 @@ class MemboxAdapter:
     def _timestamp_to_session(self, timestamp: str) -> str:
         ts = str(timestamp or "").strip()
         return ts or "session_unknown"
-
-    def _guess_user_name(self, turns: List[Dict[str, Any]]) -> str:
-        counts: Dict[str, int] = {}
-        for turn in turns:
-            speaker = str(turn.get("speaker", "")).strip()
-            if not speaker:
-                continue
-            counts[speaker] = counts.get(speaker, 0) + 1
-        if not counts:
-            return "User"
-        return sorted(counts.items(), key=lambda x: (-x[1], x[0]))[0][0]
-
-    def _guess_agent_name(self, turns: List[Dict[str, Any]], user_name: str) -> str:
-        speakers = [str(turn.get("speaker", "")).strip() for turn in turns if str(turn.get("speaker", "")).strip()]
-        for speaker in speakers:
-            if speaker != user_name:
-                return speaker
-        return "Assistant"

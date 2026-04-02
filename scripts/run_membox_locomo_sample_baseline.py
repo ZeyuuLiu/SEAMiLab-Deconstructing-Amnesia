@@ -26,10 +26,25 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from memory_eval.adapters import MemboxAdapter, MemboxAdapterConfig
+from memory_eval.adapters.o_mem_adapter import load_runtime_credentials
 from memory_eval.dataset.locomo_builder import build_locomo_eval_samples
 from memory_eval.pipeline.runner import _conversation_to_turns
 
 CATEGORY_NAMES = {1: "Multi-hop", 2: "Temporal", 3: "Open", 4: "Single-hop", 5: "Adversarial"}
+
+
+def _ensure_nltk_punkt() -> None:
+    try:
+        import nltk
+
+        nltk.data.find("tokenizers/punkt")
+    except LookupError:
+        import nltk
+
+        nltk.download("punkt_tab", quiet=True)
+        nltk.download("punkt", quiet=True)
+    except Exception:
+        pass
 
 
 def _load_episode_map(dataset_path: Path) -> Dict[str, Dict[str, Any]]:
@@ -111,14 +126,26 @@ def main() -> int:
     )
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--judge-model", default="")
+    parser.add_argument("--keys-path", default="configs/keys.local.json")
+    parser.add_argument("--api-key", default="")
+    parser.add_argument("--base-url", default="")
+    parser.add_argument("--llm-model", default="")
+    parser.add_argument("--embedding-model", default="text-embedding-3-small")
     args = parser.parse_args()
+
+    _ensure_nltk_punkt()
 
     sid = args.sample_id.strip()
     out_rel = args.output or f"outputs/membox_baseline_{sid}_all.json"
     mem_rel = args.memory_dir or f"outputs/membox_baseline_{sid}_all_memory"
 
-    keys_path = PROJECT_ROOT / "configs" / "keys.local.json"
-    keys = json.loads(keys_path.read_text(encoding="utf-8-sig"))
+    keys_path = PROJECT_ROOT / args.keys_path if not Path(args.keys_path).is_absolute() else Path(args.keys_path)
+    creds = load_runtime_credentials(str(keys_path), require_complete=False)
+    api_key = args.api_key or creds.get("api_key", "")
+    base_url = args.base_url or creds.get("base_url", "https://vip.dmxapi.com/v1")
+    llm_model = args.llm_model or creds.get("model", "gpt-4o-mini")
+    if not api_key:
+        raise RuntimeError("api_key missing: configs/keys.local.json, --api-key, or MEMORY_EVAL_API_KEY")
     dataset_path = (PROJECT_ROOT / args.dataset).resolve()
 
     all_rows = build_locomo_eval_samples(str(dataset_path), limit=None, f_key_mode="rule")
@@ -131,9 +158,10 @@ def main() -> int:
 
     adapter = MemboxAdapter(
         MemboxAdapterConfig(
-            api_key=str(keys["api_key"]),
-            base_url=str(keys["base_url"]),
-            llm_model=str(keys.get("model", "gpt-4o-mini")),
+            api_key=api_key,
+            base_url=base_url,
+            llm_model=llm_model,
+            embedding_model=str(args.embedding_model or "text-embedding-3-small"),
             membox_root=str(membox_root),
             memory_dir=memory_dir,
             run_id_prefix=f"baseline_{sid}",
@@ -146,7 +174,7 @@ def main() -> int:
     episode = episode_map.get(sid, {})
     conv = _conversation_to_turns(episode.get("conversation", {}))
 
-    judge_model = str(args.judge_model or keys.get("model", "gpt-4o-mini"))
+    judge_model = str(args.judge_model or llm_model)
 
     print(f"[INGEST] {sid} turns={len(conv)} questions={len(questions)}")
     sys.stdout.flush()
@@ -166,8 +194,8 @@ def main() -> int:
         f1 = ag._f1(answer_online, ev.answer_gold)
         bleu = ag._bleu(answer_online, ev.answer_gold)
         is_correct, judge_payload = _judge_online_correct(
-            base_url=str(keys["base_url"]),
-            api_key=str(keys["api_key"]),
+            base_url=base_url,
+            api_key=api_key,
             judge_model=judge_model,
             judge_temperature=0.0,
             question=ev.question,

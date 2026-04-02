@@ -181,9 +181,7 @@ def evaluate_retrieval_probe(inp: RetrievalProbeInput, cfg: EvaluatorConfig, s_e
             raise RuntimeError("retrieval POS llm judgement failed or empty")
         if isinstance(llm_pos_judgement, dict):
             state_hint = str(llm_pos_judgement.get("retrieval_state", "")).upper()
-            defects = [str(x).upper() for x in llm_pos_judgement.get("defects", []) if str(x).strip()]
-            if state_hint == "MISS" and (s_enc is None or s_enc != "MISS") and "RF" not in defects:
-                defects.append("RF")
+            defects = [str(x).upper() for x in llm_pos_judgement.get("defects", []) if str(x).strip() and str(x).upper() in {"LATE", "NOI"}]
             if not is_strict_llm_probe(cfg) and state_hint in {"HIT", "MISS", "NOISE"}:
                 if rank > cfg.tau_rank and "LATE" not in defects:
                     defects.append("LATE")
@@ -210,14 +208,11 @@ def evaluate_retrieval_probe(inp: RetrievalProbeInput, cfg: EvaluatorConfig, s_e
         raise RuntimeError("retrieval POS strict mode rejects rule fallback")
 
     if hit_count <= 0:
-        defects: List[str] = []
         # RF should only be assigned if encoding is not MISS (per final metric definition).
-        if s_enc is None or s_enc != "MISS":
-            defects.append("RF")
         return ProbeResult(
             probe="ret",
             state="MISS",
-            defects=defects,
+            defects=[],
             attrs={"rank_index": rank, "snr": snr},
             evidence={
                 "reason": "No retrieval hit for f_key in C_original.",
@@ -237,14 +232,14 @@ def evaluate_retrieval_probe(inp: RetrievalProbeInput, cfg: EvaluatorConfig, s_e
     if isinstance(llm_pos_judgement, dict):
         for d in llm_pos_judgement.get("defects", []):
             d = str(d).upper()
-            if d in {"RF", "LATE", "NOI"} and d not in defects:
+            if d in {"LATE", "NOI"} and d not in defects:
                 defects.append(d)
         state_hint = str(llm_pos_judgement.get("retrieval_state", "")).upper()
         if state_hint == "MISS":
             return ProbeResult(
                 probe="ret",
                 state="MISS",
-                defects=defects or (["RF"] if s_enc is None or s_enc != "MISS" else []),
+                defects=defects,
                 attrs={"rank_index": rank, "snr": snr, "hit_count": hit_count},
                 evidence={
                     "reason": str(llm_pos_judgement.get("reasoning", "LLM judged miss on retrieval quality.")),

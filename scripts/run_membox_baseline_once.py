@@ -13,8 +13,26 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from memory_eval.adapters import MemboxAdapter, MemboxAdapterConfig
+from memory_eval.adapters.o_mem_adapter import load_runtime_credentials
 from memory_eval.dataset.locomo_builder import build_locomo_eval_samples
 from memory_eval.pipeline.runner import _conversation_to_turns
+
+
+def _ensure_nltk_punkt() -> None:
+    try:
+        import nltk
+
+        nltk.data.find("tokenizers/punkt")
+    except LookupError:
+        import nltk
+
+        try:
+            nltk.download("punkt_tab", quiet=True)
+        except Exception:
+            pass
+        nltk.download("punkt", quiet=True)
+    except Exception:
+        pass
 
 
 def _chat_json(base_url: str, api_key: str, model: str, temperature: float, prompt: str) -> Dict[str, Any] | None:
@@ -87,11 +105,31 @@ def main() -> int:
     parser.add_argument("--question-index", type=int, default=0, help="Question index inside selected sample")
     parser.add_argument("--output", default="outputs/membox_baseline_once.json")
     parser.add_argument("--memory-dir", default="outputs/membox_baseline_memory")
-    parser.add_argument("--membox-root", default="", help="Optional Membox root path. Empty means system/Membox.")
+    parser.add_argument(
+        "--membox-root",
+        default="",
+        help="Membox code root. Empty = system/Membox_stableEval (recommended).",
+    )
+    parser.add_argument("--keys-path", default="configs/keys.local.json")
+    parser.add_argument("--api-key", default="")
+    parser.add_argument("--base-url", default="")
+    parser.add_argument("--llm-model", default="")
     parser.add_argument("--judge-model", default="")
+    parser.add_argument(
+        "--embedding-model",
+        default="text-embedding-3-small",
+        help="OpenAI-compatible embedding model id for Membox.",
+    )
     args = parser.parse_args()
 
-    keys = json.loads((PROJECT_ROOT / "configs" / "keys.local.json").read_text(encoding="utf-8-sig"))
+    keys_path = PROJECT_ROOT / args.keys_path if not Path(args.keys_path).is_absolute() else Path(args.keys_path)
+    creds = load_runtime_credentials(str(keys_path), require_complete=False)
+    api_key = args.api_key or creds.get("api_key", "")
+    base_url = args.base_url or creds.get("base_url", "https://vip.dmxapi.com/v1")
+    llm_model = args.llm_model or creds.get("model", "gpt-4o-mini")
+    if not api_key:
+        raise RuntimeError("api_key missing: set configs/keys.local.json, --api-key, or MEMORY_EVAL_API_KEY")
+    _ensure_nltk_punkt()
     dataset_path = PROJECT_ROOT / "data" / "locomo10.json"
     out_path = PROJECT_ROOT / args.output
 
@@ -112,12 +150,14 @@ def main() -> int:
     episode = episode_map.get(sample.sample_id, {})
     conv = _conversation_to_turns(episode.get("conversation", {}))
 
+    mroot = str(Path(args.membox_root).resolve()) if args.membox_root else str(PROJECT_ROOT / "system" / "Membox_stableEval")
     adapter = MemboxAdapter(
         MemboxAdapterConfig(
-            api_key=str(keys["api_key"]),
-            base_url=str(keys["base_url"]),
-            llm_model=str(keys.get("model", "gpt-4o-mini")),
-            membox_root=str(Path(args.membox_root).resolve()) if args.membox_root else str(PROJECT_ROOT / "system" / "Membox"),
+            api_key=api_key,
+            base_url=base_url,
+            llm_model=llm_model,
+            embedding_model=str(args.embedding_model or "text-embedding-3-small"),
+            membox_root=mroot,
             memory_dir=str((PROJECT_ROOT / args.memory_dir).resolve()),
             run_id_prefix="baseline_once",
             answer_top_n=5,
@@ -135,9 +175,9 @@ def main() -> int:
     f1 = adapter._module.AnswerGenerator._f1(answer_online, sample.answer_gold)
     bleu = adapter._module.AnswerGenerator._bleu(answer_online, sample.answer_gold)
     is_correct, judge_payload = _judge_online_correct(
-        base_url=str(keys["base_url"]),
-        api_key=str(keys["api_key"]),
-        judge_model=str(args.judge_model or keys.get("model", "gpt-4o-mini")),
+        base_url=base_url,
+        api_key=api_key,
+        judge_model=str(args.judge_model or llm_model),
         judge_temperature=0.0,
         question=sample.question,
         answer_online=answer_online,

@@ -18,7 +18,6 @@ import numpy as np
 from collections import deque
 from .utils import *
 from .prompts import *
-from FlagEmbedding import FlagAutoModel
 from sentence_transformers import SentenceTransformer
 from itertools import combinations
 from collections import defaultdict
@@ -279,6 +278,5 @@ class Episodic_Memory:
         self._save_wm_cache_episodic_memory()
         self._save_attr_episodic_memory()
         self._save_fact_episodic_memory()
-
 
 

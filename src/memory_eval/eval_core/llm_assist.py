@@ -5,6 +5,18 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, Dict, List
 
+from memory_eval.eval_core.prompts import (
+    build_attribution_prompt,
+    build_encoding_neg_prompt,
+    build_encoding_pos_prompt,
+    build_generation_neg_answer_prompt,
+    build_generation_neg_comparison_prompt,
+    build_generation_pos_answer_prompt,
+    build_generation_pos_comparison_prompt,
+    build_retrieval_neg_prompt,
+    build_retrieval_pos_prompt,
+)
+
 
 @dataclass(frozen=True)
 class LLMAssistConfig:
@@ -77,29 +89,9 @@ def llm_judge_encoding_storage(
     must_succeed: bool = False,
 ) -> Dict[str, Any] | None:
     prompt = (
-        "You are a strict evaluator for memory encoding.\n"
-        "Judge whether required evidence is truly stored.\n"
-        "Task type is POS or NEG.\n"
-        "For POS: decide if gold evidence content is present in memory (semantic match OK; minor formatting OK).\n"
-        "For NEG: if any memory would wrongly support answering, use DIRTY with DMP.\n"
-        "Return strict JSON:\n"
-        "{\"encoding_state\":\"EXIST|MISS|CORRUPT_AMBIG|CORRUPT_WRONG|DIRTY\","
-        "\"defects\":[\"EM|EA|EW|DMP\"],"
-        "\"confidence\":0.0,"
-        "\"matched_candidate_ids\":[],"
-        "\"reasoning\":\"...\","
-        "\"evidence_snippets\":[]}\n"
-        f"TaskType: {task_type}\n"
-        f"Query: {query}\n"
-        f"F_key: {json.dumps(f_key, ensure_ascii=False)}\n"
-        f"GoldEvidence: {json.dumps(evidence_texts, ensure_ascii=False)}\n"
-        "Candidates (top 50):\n"
-        + "\n".join(
-            [
-                "- id={id} text={text}".format(id=str(c.get("id", "")), text=str(c.get("text", "")))
-                for c in candidates[:50]
-            ]
-        )
+        build_encoding_neg_prompt(query=query, evidence_texts=evidence_texts, candidates=candidates)
+        if task_type == "NEG"
+        else build_encoding_pos_prompt(query=query, f_key=f_key, evidence_texts=evidence_texts, candidates=candidates)
     )
     return _chat_json(cfg, prompt, must_succeed=must_succeed)
 
@@ -119,26 +111,16 @@ def llm_judge_retrieval_quality_pos(
     must_succeed: bool = False,
 ) -> Dict[str, Any] | None:
     hit_indices = list(hit_indices or [])
-    prompt = (
-        "You are the retrieval probe for POS tasks.\n"
-        "Your job is to compare the memory system's native retrieval output C_original against gold evidence.\n"
-        "Use the retrieved texts as primary evidence, and use the computed metrics below as auxiliary diagnostic signals.\n"
-        "Return strict JSON:\n"
-        "{\"retrieval_state\":\"HIT|MISS|NOISE\","
-        "\"defects\":[\"RF|LATE|NOI\"],"
-        "\"matched_ids\":[],"
-        "\"reasoning\":\"...\","
-        "\"evidence_snippets\":[]}\n"
-        "Rules:\n"
-        f"- If gold evidence is not meaningfully present in any retrieved item -> retrieval_state MISS and include RF (unless encoding layer will gate RF separately).\n"
-        f"- If present but ranked worse than position {tau_rank} (1-based best rank) -> include LATE.\n"
-        f"- If retrieved context is dominated by irrelevant noise vs gold (SNR below {tau_snr} mentally) -> include NOI.\n"
-        f"- ComputedDiagnostics: rank_index={rank_index}, hit_indices={json.dumps(hit_indices, ensure_ascii=False)}, snr={snr:.6f}\n"
-        f"Query: {query}\n"
-        f"F_key: {json.dumps(f_key, ensure_ascii=False)}\n"
-        f"GoldEvidence: {json.dumps(evidence_texts, ensure_ascii=False)}\n"
-        "Retrieved items:\n"
-        + "\n".join([f"- id={it.get('id','')} score={it.get('score',0)} text={it.get('text','')}" for it in retrieved_items[:20]])
+    prompt = build_retrieval_pos_prompt(
+        query=query,
+        f_key=f_key,
+        evidence_texts=evidence_texts,
+        retrieved_items=retrieved_items,
+        rank_index=rank_index,
+        hit_indices=hit_indices,
+        snr=snr,
+        tau_rank=tau_rank,
+        tau_snr=tau_snr,
     )
     return _chat_json(cfg, prompt, must_succeed=must_succeed)
 
@@ -150,19 +132,7 @@ def llm_judge_retrieval_quality_neg(
     *,
     must_succeed: bool = False,
 ) -> Dict[str, Any] | None:
-    prompt = (
-        "You are a strict retrieval evaluator for NEG tasks.\n"
-        "Judge if retrieved contexts are misleading/noisy and may induce non-abstain answers.\n"
-        "Return strict JSON:\n"
-        "{\"retrieval_state\":\"NOISE|MISS\","
-        "\"defects\":[\"NIR\"],"
-        "\"reasoning\":\"...\","
-        "\"evidence_snippets\":[]}\n"
-        f"Query: {query}\n"
-        "Retrieved items:\n"
-        + "\n".join([f"- id={it.get('id','')} score={it.get('score',0)} text={it.get('text','')}" for it in retrieved_items[:20]])
-    )
-    return _chat_json(cfg, prompt, must_succeed=must_succeed)
+    return _chat_json(cfg, build_retrieval_neg_prompt(query=query, retrieved_items=retrieved_items), must_succeed=must_succeed)
 
 
 def llm_judge_fact_match(
@@ -198,20 +168,9 @@ def llm_judge_generation_answer(
     LLM 判题并输出 FAIL 子类（GH/GF/GRF）。
     """
     prompt = (
-        "You are the generation probe for a memory-system evaluation.\n"
-        "This probe judges whether the oracle-context answer is correct, and if incorrect, what kind of generation failure it is.\n"
-        "If the oracle answer is semantically equivalent to gold (same entities/dates), set correct=true.\n"
-        "Return strict JSON only with schema:\n"
-        "{\"correct\": true|false, \"substate\": \"GH|GF|GRF|NONE\", \"grounded\": true|false, \"reason\": \"...\"}\n"
-        "Rules:\n"
-        "- NEG incorrect should be GH.\n"
-        "- POS incorrect and ungrounded should be GF.\n"
-        "- POS incorrect but grounded should be GRF.\n"
-        f"TaskType: {task_type}\n"
-        f"Question: {question}\n"
-        f"OracleContext: {oracle_context}\n"
-        f"OracleAnswer: {answer_oracle}\n"
-        f"GoldAnswer: {answer_gold}\n"
+        build_generation_neg_answer_prompt(query=question, oracle_context=oracle_context, answer_oracle=answer_oracle, answer_gold=answer_gold)
+        if task_type == "NEG"
+        else build_generation_pos_answer_prompt(query=question, oracle_context=oracle_context, answer_oracle=answer_oracle, answer_gold=answer_gold)
     )
     return _chat_json(cfg, prompt, must_succeed=must_succeed)
 
@@ -228,24 +187,42 @@ def llm_judge_generation_comparison(
     must_succeed: bool = False,
 ) -> Dict[str, Any] | None:
     prompt = (
-        "You are the generation comparison probe.\n"
-        "Compare online answer, oracle-context answer, and gold answer.\n"
-        "Treat semantically equivalent answers as correct (e.g. same calendar date with different punctuation/spacing).\n"
-        "Return strict JSON:\n"
-        "{\"generation_state\":\"PASS|FAIL\","
-        "\"defects\":[\"GH|GF|GRF\"],"
-        "\"online_correct\":true,"
-        "\"oracle_correct\":true,"
-        "\"comparative_judgement\":{"
-        "\"online_vs_gold\":\"...\","
-        "\"oracle_vs_gold\":\"...\","
-        "\"online_vs_oracle\":\"...\"},"
-        "\"reasoning\":\"...\"}\n"
-        f"TaskType: {task_type}\n"
-        f"Question: {question}\n"
-        f"GoldAnswer: {answer_gold}\n"
-        f"OnlineAnswer: {answer_online}\n"
-        f"OracleAnswer: {answer_oracle}\n"
-        f"OracleContext: {oracle_context}\n"
+        build_generation_neg_comparison_prompt(
+            query=question,
+            answer_gold=answer_gold,
+            answer_online=answer_online,
+            answer_oracle=answer_oracle,
+            oracle_context=oracle_context,
+        )
+        if task_type == "NEG"
+        else build_generation_pos_comparison_prompt(
+            query=question,
+            answer_gold=answer_gold,
+            answer_online=answer_online,
+            answer_oracle=answer_oracle,
+            oracle_context=oracle_context,
+        )
+    )
+    return _chat_json(cfg, prompt, must_succeed=must_succeed)
+
+
+def llm_judge_attribution(
+    cfg: LLMAssistConfig,
+    task_type: str,
+    query: str,
+    answer_gold: str,
+    enc_summary: Dict[str, Any],
+    ret_summary: Dict[str, Any],
+    gen_summary: Dict[str, Any],
+    *,
+    must_succeed: bool = False,
+) -> Dict[str, Any] | None:
+    prompt = build_attribution_prompt(
+        task_type=task_type,
+        query=query,
+        answer_gold=answer_gold,
+        enc_summary=enc_summary,
+        ret_summary=ret_summary,
+        gen_summary=gen_summary,
     )
     return _chat_json(cfg, prompt, must_succeed=must_succeed)

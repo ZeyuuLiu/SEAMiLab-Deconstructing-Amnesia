@@ -11,6 +11,21 @@ from memory_eval.eval_core.engine import ParallelThreeProbeEvaluator
 from memory_eval.eval_core.models import AttributionResult, EvalSample, EvaluatorConfig
 
 
+def _redact_secrets(obj: Any) -> Any:
+    if isinstance(obj, dict):
+        out: Dict[str, Any] = {}
+        for key, value in obj.items():
+            lowered = str(key).lower()
+            if any(token in lowered for token in ("api_key", "apikey", "token", "secret", "password")):
+                out[key] = "***REDACTED***" if value else value
+            else:
+                out[key] = _redact_secrets(value)
+        return out
+    if isinstance(obj, list):
+        return [_redact_secrets(x) for x in obj]
+    return obj
+
+
 class FullEvalAdapterProtocol(Protocol):
     """
     Full adapter contract used by end-to-end evaluation pipeline.
@@ -206,7 +221,7 @@ class ThreeProbeEvaluationPipeline:
                 "top_k": self.cfg.top_k,
                 "limit": self.cfg.limit,
                 "f_key_mode": self.cfg.f_key_mode,
-                "evaluator_config": asdict(self.cfg.evaluator_config),
+                "evaluator_config": _redact_secrets(asdict(self.cfg.evaluator_config)),
             },
             "adapter_manifest": export_adapter_runtime_manifest(adapter),
             "summary": summary,

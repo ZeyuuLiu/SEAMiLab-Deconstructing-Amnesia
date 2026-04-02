@@ -66,6 +66,90 @@ class AdapterTrace:
 
 
 @dataclass(frozen=True)
+class EvidenceSpec:
+    query: str
+    task_type: str
+    question_id: str = ""
+    sample_id: str = ""
+    f_key: List[str] = field(default_factory=list)
+    evidence_texts: List[str] = field(default_factory=list)
+    evidence_with_time: List[str] = field(default_factory=list)
+    oracle_context: str = ""
+    fact_units: List[Dict[str, Any]] = field(default_factory=list)
+    must_have_constraints: List[str] = field(default_factory=list)
+    soft_constraints: List[str] = field(default_factory=list)
+    negative_constraints: List[str] = field(default_factory=list)
+    evidence_priority: List[str] = field(default_factory=list)
+    normalization_notes: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class MemoryObservation:
+    memory_id: str
+    text: str
+    normalized_text: str = ""
+    source_type: str = ""
+    source_name: str = ""
+    storage_kind: str = ""
+    speaker: str = ""
+    timestamp: str = ""
+    session_id: str = ""
+    score: float = 0.0
+    meta: Dict[str, Any] = field(default_factory=dict)
+    raw_payload_ref: str = ""
+
+
+@dataclass(frozen=True)
+class CandidateGroup:
+    group_id: str
+    member_ids: List[str]
+    group_type: str
+    aggregated_text: str
+    supporting_slots: List[str] = field(default_factory=list)
+    source_breakdown: List[str] = field(default_factory=list)
+    confidence_hint: float = 0.0
+
+
+@dataclass(frozen=True)
+class MemoryObservationBundle:
+    full_memory_view: List[MemoryObservation] = field(default_factory=list)
+    native_candidate_view: List[MemoryObservation] = field(default_factory=list)
+    framework_candidate_view: List[MemoryObservation] = field(default_factory=list)
+    native_retrieval_shadow: List[MemoryObservation] = field(default_factory=list)
+    combined_candidates: List[MemoryObservation] = field(default_factory=list)
+    candidate_groups: List[CandidateGroup] = field(default_factory=list)
+    adapter_manifest: Dict[str, Any] = field(default_factory=dict)
+    observability_notes: List[str] = field(default_factory=list)
+    coverage_report: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class EncodingAssessment:
+    state: str
+    defects: List[str]
+    confidence: float = 0.0
+    matched_ids: List[str] = field(default_factory=list)
+    supporting_snippets: List[str] = field(default_factory=list)
+    contradicting_snippets: List[str] = field(default_factory=list)
+    missing_fact_units: List[str] = field(default_factory=list)
+    ambiguous_fact_units: List[str] = field(default_factory=list)
+    coverage_report: Dict[str, Any] = field(default_factory=dict)
+    reasoning_chain: List[str] = field(default_factory=list)
+    evidence_found_by: str = "not_found"
+    risk_flags: List[str] = field(default_factory=list)
+    debug_payload: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class AttributionAssessment:
+    primary_cause: str
+    secondary_causes: List[str] = field(default_factory=list)
+    decision_trace: List[str] = field(default_factory=list)
+    summary: str = ""
+    llm_payload: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class ProbeResult:
     """
     Generic probe result.
@@ -117,19 +201,19 @@ class EvaluatorConfig:
     tau_snr: float = 0.2
     neg_noise_score_threshold: float = 0.15
     max_workers: int = 3  # parallel probes / 三探针并行线程数
-    # LLM-assisted probe judgments are enabled by default.
-    # 三层探针默认开启 LLM 辅助判定。
-    use_llm_assist: bool = True
+    # LLM-assisted probe judgments are opt-in by default.
+    # 默认配置应可本地直接运行，LLM 辅助判定改为显式开启。
+    use_llm_assist: bool = False
     llm_model: str = "gpt-4o-mini"
     llm_temperature: float = 0.0
     llm_api_key: str = ""
     llm_base_url: str = "https://vip.dmxapi.com/v1"
-    # Strict execution policy (default on): full-path + fail-fast.
-    # 严格执行策略（默认开启）：完整链路 + 失败即报错。
-    require_llm_judgement: bool = True
+    # Strict execution policy is opt-in.
+    # 严格执行策略改为显式开启，避免无 API key 时开箱即失败。
+    require_llm_judgement: bool = False
     strict_adapter_call: bool = True
-    disable_rule_fallback: bool = True
-    require_online_answer: bool = True
+    disable_rule_fallback: bool = False
+    require_online_answer: bool = False
     # Encoding: merge native retrieval into LLM candidate set (observation alignment).
     encoding_merge_native_retrieval: bool = True
     encoding_native_retrieval_top_k: int = 20

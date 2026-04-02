@@ -11,6 +11,21 @@ from memory_eval.adapters.o_mem_adapter import OMemAdapter, OMemAdapterConfig
 AdapterBuilder = Callable[[Dict[str, Any]], Any]
 
 
+def _redact_secrets(obj: Any) -> Any:
+    if isinstance(obj, dict):
+        out: Dict[str, Any] = {}
+        for key, value in obj.items():
+            lowered = str(key).lower()
+            if any(token in lowered for token in ("api_key", "apikey", "token", "secret", "password")):
+                out[key] = "***REDACTED***" if value else value
+            else:
+                out[key] = _redact_secrets(value)
+        return out
+    if isinstance(obj, list):
+        return [_redact_secrets(x) for x in obj]
+    return obj
+
+
 def _build_membox(raw: Dict[str, Any]) -> MemboxAdapter:
     cfg = MemboxAdapterConfig(**raw)
     return MemboxAdapter(config=cfg)
@@ -42,8 +57,12 @@ def _build_o_mem_stable_eval(raw: Dict[str, Any]) -> OMemAdapter:
 _ADAPTER_BUILDERS: Dict[str, AdapterBuilder] = {
     "membox": _build_membox,
     "membox_stable_eval": _build_membox_stable_eval,
+    "membox:stable_eval": _build_membox_stable_eval,
     "o_mem": _build_o_mem,
     "o_mem_stable_eval": _build_o_mem_stable_eval,
+    "o_mem:stable_eval": _build_o_mem_stable_eval,
+    "omem": _build_o_mem,
+    "omem:stable_eval": _build_o_mem_stable_eval,
 }
 
 
@@ -61,17 +80,17 @@ def create_adapter_by_system(memory_system: str, config: Dict[str, Any] | None =
 
 
 def export_adapter_runtime_manifest(adapter: Any) -> Dict[str, Any]:
-    """
-    Build a lightweight adapter manifest for audit/report.
-    构建适配器运行清单，用于审计与可追溯。
-    """
-    out: Dict[str, Any] = {"adapter_class": adapter.__class__.__name__}
+    if hasattr(adapter, "runtime_manifest") and callable(getattr(adapter, "runtime_manifest")):
+        out = dict(adapter.runtime_manifest())
+        out["adapter_class"] = adapter.__class__.__name__
+    else:
+        out = {"adapter_class": adapter.__class__.__name__}
     cfg = getattr(adapter, "config", None)
     if cfg is not None:
         if is_dataclass(cfg):
-            out["adapter_config"] = asdict(cfg)
+            out["adapter_config"] = _redact_secrets(asdict(cfg))
         elif isinstance(cfg, dict):
-            out["adapter_config"] = dict(cfg)
+            out["adapter_config"] = _redact_secrets(dict(cfg))
         else:
             out["adapter_config"] = {"repr": repr(cfg)}
     return out

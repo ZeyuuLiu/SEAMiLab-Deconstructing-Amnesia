@@ -86,9 +86,12 @@ def evaluate_generation_probe(inp: GenerationProbeInput, cfg: EvaluatorConfig) -
         online_correct = False
     else:
         correct = _is_correct_rule(inp)
-        online_norm = normalize_text(inp.answer_online)
-        gold_norm = normalize_text(inp.answer_gold)
-        online_correct = bool(gold_norm) and (online_norm == gold_norm or gold_norm in online_norm)
+        if inp.task_type == "NEG":
+            online_correct = is_abstain(inp.answer_online)
+        else:
+            online_norm = normalize_text(inp.answer_online)
+            gold_norm = normalize_text(inp.answer_gold)
+            online_correct = bool(gold_norm) and (online_norm == gold_norm or gold_norm in online_norm)
 
     llm_must = bool(cfg.use_llm_assist and cfg.require_llm_judgement)
 

@@ -20,6 +20,7 @@ If you want the version intended for local baseline + eval runs in this repo, us
 **Related docs in this repo**
 
 - Repair rationale (Chinese): `docs/code-audit/2026-03-29/membox-stableeval-repair-doc-zh.md`
+- LoCoMo reproduction + three-probe eval (Chinese): `docs/code-audit/2026-03-29/membox-locomo-repro-and-eval-zh.md`
 - Copy-paste `nohup` commands (Membox + O-Mem): `docs/code-audit/2026-03-28/omem-gpu-runbook-and-logged-restart-zh.md` §11
 
 ---
