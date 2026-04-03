@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 
 from memory_eval.eval_core.prompts import (
     build_attribution_prompt,
+    build_correctness_judge_prompt,
     build_encoding_neg_prompt,
     build_encoding_pos_prompt,
     build_generation_neg_answer_prompt,
@@ -226,3 +227,34 @@ def llm_judge_attribution(
         gen_summary=gen_summary,
     )
     return _chat_json(cfg, prompt, must_succeed=must_succeed)
+
+
+def llm_judge_answer_correctness(
+    cfg: LLMAssistConfig,
+    *,
+    task_type: str,
+    question: str,
+    answer_gold: str,
+    answer_pred: str,
+    oracle_context: str = "",
+    retrieved_context: str = "",
+    must_succeed: bool = False,
+) -> Dict[str, Any] | None:
+    payload = _chat_json(
+        cfg,
+        build_correctness_judge_prompt(
+            task_type=task_type,
+            question=question,
+            answer_gold=answer_gold,
+            answer_pred=answer_pred,
+            oracle_context=oracle_context,
+            retrieved_context=retrieved_context,
+        ),
+        must_succeed=must_succeed,
+    )
+    if not isinstance(payload, dict):
+        return payload
+    label = str(payload.get("label", "")).strip().upper()
+    payload["label"] = label
+    payload["correct"] = label == "CORRECT"
+    return payload

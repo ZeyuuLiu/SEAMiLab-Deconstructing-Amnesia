@@ -36,6 +36,15 @@ class AttributionAgent:
         merged_defects = ordered_defect_union(enc.defects, merged_ret.defects, gen.defects)
         assessment = self._build_assessment(sample, enc, merged_ret, gen, decision_trace, cfg)
         probe_results: Dict[str, ProbeResult] = {"enc": enc, "ret": merged_ret, "gen": gen}
+        final_attribution = {
+            "agent_name": self.name,
+            "final_attribution": assessment.primary_cause if assessment.primary_cause != "none" else "no_major_failure",
+            "primary_cause": assessment.primary_cause,
+            "secondary_causes": list(assessment.secondary_causes),
+            "decision_logic": self._decision_logic(assessment, enc, merged_ret, gen),
+            "final_judgement": self._final_judgement(gen),
+            "llm_payload": dict(assessment.llm_payload),
+        }
         return AttributionResult(
             question_id=sample.question_id,
             sample_id=sample.sample_id,
@@ -44,22 +53,7 @@ class AttributionAgent:
             defects=merged_defects,
             probe_results=probe_results,
             attribution_evidence={
-                "enc_evidence": enc.evidence,
-                "ret_evidence": merged_ret.evidence,
-                "gen_evidence": gen.evidence,
-                "decision_trace": list(assessment.decision_trace),
-                "attribution_agent": {
-                    "agent_name": self.name,
-                    "primary_cause": assessment.primary_cause,
-                    "secondary_causes": list(assessment.secondary_causes),
-                    "summary": assessment.summary,
-                    "llm_payload": dict(assessment.llm_payload),
-                    "cross_probe_summary": {
-                        "encoding": {"state": enc.state, "defects": list(enc.defects)},
-                        "retrieval": {"state": merged_ret.state, "defects": list(merged_ret.defects)},
-                        "generation": {"state": gen.state, "defects": list(gen.defects)},
-                    },
-                },
+                "final_attribution": final_attribution,
             },
         )
 
@@ -126,3 +120,31 @@ class AttributionAgent:
         if layer == "generation":
             return gen.state == "FAIL" or bool(gen.defects)
         return False
+
+    def _decision_logic(
+        self,
+        assessment: AttributionAssessment,
+        enc: ProbeResult,
+        ret: ProbeResult,
+        gen: ProbeResult,
+    ) -> List[str]:
+        logic: List[str] = []
+        if enc.state != "EXIST":
+            logic.append(f"编码层状态为 {enc.state}，未形成稳定可用的目标记忆。")
+        if ret.state != "HIT" or ret.defects:
+            logic.append(f"检索层状态为 {ret.state}，缺陷为 {', '.join(ret.defects) or '无'}。")
+        if gen.state != "PASS" or gen.defects:
+            logic.append(f"生成层状态为 {gen.state}，缺陷为 {', '.join(gen.defects) or '无'}。")
+        logic.extend([item for item in assessment.decision_trace if item])
+        if not logic:
+            logic.append("三层探针均未发现显著问题。")
+        return logic[:4]
+
+    def _final_judgement(self, gen: ProbeResult) -> str:
+        online_correct = bool(((gen.evidence or {}).get("online_correctness") or {}).get("final_correct", False))
+        oracle_correct = bool(((gen.evidence or {}).get("oracle_correctness") or {}).get("final_correct", False))
+        if online_correct:
+            return "system_answer_correct"
+        if oracle_correct:
+            return "system_answer_wrong_but_oracle_answer_correct"
+        return "oracle_answer_incorrect"

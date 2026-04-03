@@ -1,7 +1,15 @@
 from __future__ import annotations
 
+import sys
 import unittest
+from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from memory_eval.eval_core import HighRecallRequest, HighRecallResponse
 from memory_eval.eval_core.encoding import EncodingProbeInput
 from memory_eval.eval_core.encoding_agent import EncodingAgent
 from memory_eval.eval_core.engine import ParallelThreeProbeEvaluator
@@ -19,6 +27,8 @@ def build_cfg() -> EvaluatorConfig:
         disable_rule_fallback=False,
         strict_adapter_call=False,
         require_online_answer=False,
+        correctness_use_llm_judge=False,
+        correctness_require_llm_judge=False,
         max_workers=3,
     )
 
@@ -29,6 +39,7 @@ class MockFullAdapter:
         self.retrieved_items = retrieved_items
         self.online_answer = online_answer
         self.oracle_answer = oracle_answer
+        self._external_high_recall_retriever = None
 
     def ingest_conversation(self, session_id, user_id, turns):
         return {"session_id": session_id, "user_id": user_id, "turns": list(turns)}
@@ -50,6 +61,20 @@ class MockFullAdapter:
 
     def generate_oracle_answer(self, run_ctx, query, oracle_context):
         return self.oracle_answer
+
+    def set_external_high_recall_retriever(self, retriever):
+        self._external_high_recall_retriever = retriever
+
+    def get_external_high_recall_retriever(self):
+        return self._external_high_recall_retriever
+
+
+class MockHighRecallRetriever:
+    def retrieve(self, request: HighRecallRequest) -> HighRecallResponse:
+        return HighRecallResponse(
+            candidates=[{"id": "ext-1", "text": "昨天 Caroline 去了 LGBTQ support group。", "score": 1.0, "meta": {"source": "external"}}],
+            diagnostics={"provider": "mock"},
+        )
 
 
 class EvalAgentTests(unittest.TestCase):
@@ -170,7 +195,7 @@ class EvalAgentTests(unittest.TestCase):
         )
         self.assertEqual(result.states["enc"], "MISS")
         self.assertNotIn("RF", result.probe_results["ret"].defects)
-        self.assertEqual(result.attribution_evidence["attribution_agent"]["primary_cause"], "encoding")
+        self.assertEqual(result.attribution_evidence["final_attribution"]["primary_cause"], "encoding")
 
     def test_attribution_agent_adds_rf_when_encoding_exists_but_retrieval_miss(self):
         evaluator = ParallelThreeProbeEvaluator(config=self.cfg)
@@ -191,6 +216,19 @@ class EvalAgentTests(unittest.TestCase):
         )
         self.assertEqual(result.states["enc"], "EXIST")
         self.assertIn("RF", result.probe_results["ret"].defects)
+
+    def test_encoding_agent_uses_external_high_recall_retriever(self):
+        agent = EncodingAgent()
+        adapter = MockFullAdapter(
+            memory_view=[{"id": "m1", "text": "无关内容", "meta": {}}],
+            retrieved_items=[],
+            online_answer="",
+            oracle_answer="",
+        )
+        adapter.set_external_high_recall_retriever(MockHighRecallRetriever())
+        bundle = agent.collect_observations(self.pos_sample, adapter, run_ctx={})
+        self.assertTrue(bundle.coverage_report["used_external_high_recall_retriever"])
+        self.assertTrue(any(obs.source_name == "external_high_recall_retriever" for obs in bundle.native_candidate_view))
 
 
 if __name__ == "__main__":

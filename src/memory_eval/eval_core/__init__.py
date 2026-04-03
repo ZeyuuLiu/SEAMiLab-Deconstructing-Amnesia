@@ -10,6 +10,7 @@ from memory_eval.eval_core.encoding_agent import EncodingAgent
 from memory_eval.eval_core.engine import ParallelThreeProbeEvaluator
 from memory_eval.eval_core.generation import GenerationProbeInput
 from memory_eval.eval_core.generation_agent import GenerationAgent
+from memory_eval.eval_core.high_recall import EncodingHighRecallRetriever, HighRecallRequest, HighRecallResponse
 from memory_eval.eval_core.models import (
     AdapterTrace,
     AttributionAssessment,
@@ -40,6 +41,9 @@ __all__ = [
     "RetrievalAgent",
     "GenerationAgent",
     "AttributionAgent",
+    "EncodingHighRecallRetriever",
+    "HighRecallRequest",
+    "HighRecallResponse",
     "EncodingProbeInput",
     "RetrievalProbeInput",
     "GenerationProbeInput",

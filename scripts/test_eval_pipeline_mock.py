@@ -46,6 +46,7 @@ class MockFullAdapter:
 
 def main() -> int:
     output = PROJECT_ROOT / "outputs" / "test_eval_pipeline_mock.json"
+    run_dir = output.with_suffix("")
     pipeline = ThreeProbeEvaluationPipeline(
         PipelineConfig(
             dataset_path=str(PROJECT_ROOT / "data" / "locomo10.json"),
@@ -64,9 +65,14 @@ def main() -> int:
     report = pipeline.run(MockFullAdapter())
     assert report["summary"]["total"] == 2, "unexpected sample count"
     assert output.exists(), "output file not written"
+    assert (run_dir / "run_summary.json").exists(), "run summary not written"
+    assert (run_dir / "question_index.json").exists(), "question index not written"
     with output.open("r", encoding="utf-8") as f:
         parsed = json.load(f)
     assert "results" in parsed and isinstance(parsed["results"], list), "missing results list"
+    assert "question_index" in parsed and len(parsed["question_index"]) == 2, "missing question index"
+    first_result_file = run_dir / parsed["question_index"][0]["result_file"]
+    assert first_result_file.exists(), "per-question json not written"
     print("Eval pipeline mock test PASSED.")
     return 0
 

@@ -208,3 +208,31 @@ def build_attribution_prompt(
         f"RetrievalSummary: {_dump(ret_summary)}\n"
         f"GenerationSummary: {_dump(gen_summary)}\n"
     )
+
+
+def build_correctness_judge_prompt(
+    task_type: str,
+    question: str,
+    answer_gold: str,
+    answer_pred: str,
+    oracle_context: str = "",
+    retrieved_context: str = "",
+) -> str:
+    task_desc = (
+        "NEG 任务：参考 TiMem 的 generous judge 风格，判断模型回答是否符合给定正确答案；正确答案通常是拒答或不可判断。"
+        if task_type == "NEG"
+        else "POS 任务：参考 TiMem 的 generous judge 风格，判断模型回答是否与正确答案语义等价。"
+    )
+    return (
+        "你的任务是将模型回答标记为 CORRECT 或 WRONG。\n"
+        "你会收到 question、gold answer、generated answer。\n"
+        "请宽松评判：只要 generated answer 触及与 gold 相同主题、语义等价，或包含得到正确答案所需的关键中间信息，就应判为 CORRECT。\n"
+        "对于时间问题，只要指向同一日期、月份、年份或时间段，即使格式不同，也应判为 CORRECT。\n"
+        "请只返回严格 JSON：{\"label\":\"CORRECT|WRONG\",\"reason\":\"...\"}\n"
+        f"TaskDefinition: {task_desc}\n"
+        f"Question: {question}\n"
+        f"CorrectAnswer: {answer_gold}\n"
+        f"ModelResponse: {answer_pred}\n"
+        f"OracleContext: {oracle_context}\n"
+        f"RetrievedContext: {retrieved_context}\n"
+    )

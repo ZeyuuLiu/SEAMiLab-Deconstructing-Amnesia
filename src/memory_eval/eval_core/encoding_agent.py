@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from memory_eval.eval_core.adapter_protocol import EncodingAdapterProtocol, RetrievalAdapterProtocol
 from memory_eval.eval_core.encoding import EncodingProbeInput
+from memory_eval.eval_core.high_recall import HighRecallRequest, HighRecallResponse
 from memory_eval.eval_core.llm_assist import LLMAssistConfig, llm_judge_encoding_storage, llm_judge_fact_match
 from memory_eval.eval_core.models import (
     CandidateGroup,
@@ -129,8 +130,41 @@ class EncodingAgent:
         native_retrieval_shadow: List[MemoryObservation] = []
         observability_notes: List[str] = []
         used_framework_fallback = False
+        external_retriever = getattr(adapter, "get_external_high_recall_retriever", lambda: None)()
+        if external_retriever is not None:
+            try:
+                external_response = external_retriever.retrieve(
+                    HighRecallRequest(
+                        query=sample.question,
+                        f_key=list(sample.f_key),
+                        evidence_texts=list(sample.evidence_with_time or sample.evidence_texts),
+                        memory_corpus=memory_corpus,
+                        metadata={
+                            "sample_id": sample.sample_id,
+                            "question_id": sample.question_id,
+                            "task_type": sample.task_type,
+                            "run_ctx": run_ctx,
+                            "adapter_class": adapter.__class__.__name__,
+                        },
+                    )
+                )
+                if isinstance(external_response, HighRecallResponse):
+                    external_records = self._normalize_records(external_response.candidates)
+                    native_candidate_records = self._merge_records(native_candidate_records, external_records)
+                    native_candidate_view.extend(
+                        self._records_to_observations(external_records, "native_candidate", "external_high_recall_retriever")
+                    )
+                    diagnostics = dict(external_response.diagnostics)
+                    if diagnostics:
+                        observability_notes.append(f"external_high_recall_retriever diagnostics: {diagnostics}")
+                else:
+                    raise RuntimeError("external high recall retriever must return HighRecallResponse")
+            except Exception as exc:
+                if cfg and cfg.strict_adapter_call:
+                    raise RuntimeError(f"encoding external_high_recall_retriever failed: {exc}") from exc
+                observability_notes.append(f"external_high_recall_retriever failed: {exc}")
         hybrid_fn = getattr(adapter, "hybrid_retrieve_candidates", None)
-        if callable(hybrid_fn):
+        if not native_candidate_records and callable(hybrid_fn):
             try:
                 hybrid_records = self._normalize_records(
                     hybrid_fn(
@@ -185,6 +219,9 @@ class EncodingAgent:
             "retrieval_shadow_count": len(native_retrieval_shadow),
             "combined_candidate_count": len(combined_candidates),
             "candidate_group_count": len(candidate_groups),
+            "used_external_high_recall_retriever": any(
+                obs.source_name == "external_high_recall_retriever" for obs in native_candidate_view
+            ),
             "used_framework_fallback": used_framework_fallback,
             "used_native_retrieval_shadow": bool(native_retrieval_shadow),
         }

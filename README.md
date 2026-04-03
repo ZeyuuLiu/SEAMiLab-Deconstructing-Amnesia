@@ -324,27 +324,130 @@ This script reports:
 2. runtime importability in current environment
 3. overall readiness conclusion
 
+## O-Mem / MemBox Rerun Guide
+
+The current recommended entrypoint for real reproduction and evaluation is:
+
+- `scripts/run_real_memory_eval.py`
+
+Detailed runbook:
+
+- `docs/architecture/omem-membox-rerun-and-eval-runbook-zh-v0.2.md`
+
+Current recommended stable system keys:
+
+1. `o_mem_stable_eval`
+2. `membox_stable_eval`
+
+### O-Mem baseline
+
+```bash
+conda run -n memeval-omem-v1 python scripts/run_real_memory_eval.py \
+  --memory-system o_mem_stable_eval \
+  --mode baseline \
+  --dataset data/locomo10.json \
+  --sample-id conv-26 \
+  --limit 10 \
+  --keys-path configs/keys.local.json \
+  --embedding-model-path /home/4T/liuzeyu/memory-eval/SEAMiLab-Deconstructing-Amnesia/Qwen/Qwen3-Embedding-0.6B \
+  --output outputs/o_mem_conv26_baseline.json
+```
+
+### O-Mem eval
+
+```bash
+conda run -n memeval-omem-v1 python scripts/run_real_memory_eval.py \
+  --memory-system o_mem_stable_eval \
+  --mode eval \
+  --dataset data/locomo10.json \
+  --sample-id conv-26 \
+  --limit 10 \
+  --keys-path configs/keys.local.json \
+  --embedding-model-path /home/4T/liuzeyu/memory-eval/SEAMiLab-Deconstructing-Amnesia/Qwen/Qwen3-Embedding-0.6B \
+  --output outputs/o_mem_conv26_eval.json
+```
+
+### MemBox build
+
+```bash
+conda run -n memeval-membox-v1 python scripts/run_real_memory_eval.py \
+  --memory-system membox_stable_eval \
+  --mode build \
+  --dataset data/locomo10.json \
+  --sample-id conv-26 \
+  --keys-path configs/keys.local.json \
+  --request-timeout-sec 120 \
+  --output outputs/membox_conv26_build_manifest.json
+```
+
+### MemBox baseline with reused build artifact
+
+```bash
+conda run -n memeval-membox-v1 python scripts/run_real_memory_eval.py \
+  --memory-system membox_stable_eval \
+  --mode baseline \
+  --dataset data/locomo10.json \
+  --sample-id conv-26 \
+  --build-manifest outputs/membox_conv26_build_manifest.json \
+  --keys-path configs/keys.local.json \
+  --request-timeout-sec 120 \
+  --output outputs/membox_conv26_baseline.json
+```
+
+### MemBox eval with reused build artifact
+
+```bash
+conda run -n memeval-membox-v1 python scripts/run_real_memory_eval.py \
+  --memory-system membox_stable_eval \
+  --mode eval \
+  --dataset data/locomo10.json \
+  --sample-id conv-26 \
+  --limit 10 \
+  --build-manifest outputs/membox_conv26_build_manifest.json \
+  --keys-path configs/keys.local.json \
+  --request-timeout-sec 120 \
+  --output outputs/membox_conv26_eval.json
+```
+
+### Output structure
+
+`baseline` writes one aggregate JSON file.
+
+`eval` now writes both:
+
+1. aggregate output JSON
+2. sibling run directory with:
+   - `run_summary.json`
+   - `question_index.json`
+   - `<sample_id>/<question_id>.json`
+
+Quick smoke test:
+
+```bash
+python scripts/test_eval_pipeline_mock.py
+```
+
 ## Full Evaluation Pipeline
 
-Run full three-probe pipeline on LOCOMO with your adapter implementation:
+For adapter-development or protocol-debug use, the lower-level pipeline entrypoint remains available:
 
-```powershell
-python scripts/run_eval_pipeline.py `
-  --memory-system o_mem `
-  --adapter-config-json "{\"use_real_omem\":true,\"api_key\":\"...\",\"base_url\":\"...\"}" `
-  --dataset data/locomo10.json `
-  --output outputs/eval_pipeline_results.json `
+```bash
+python scripts/run_eval_pipeline.py \
+  --memory-system o_mem \
+  --adapter-config-json '{"use_real_omem":true,"api_key":"...","base_url":"..."}' \
+  --dataset data/locomo10.json \
+  --output outputs/eval_pipeline_results.json \
   --limit 10
 ```
 
 Or load a custom adapter class directly:
 
-```powershell
-python scripts/run_eval_pipeline.py `
-  --adapter-module your_adapter_module `
-  --adapter-class YourAdapterClass `
-  --dataset data/locomo10.json `
-  --output outputs/eval_pipeline_results.json `
+```bash
+python scripts/run_eval_pipeline.py \
+  --adapter-module your_adapter_module \
+  --adapter-class YourAdapterClass \
+  --dataset data/locomo10.json \
+  --output outputs/eval_pipeline_results.json \
   --limit 10
 ```
 
@@ -355,30 +458,7 @@ Adapter must implement:
 3. `find_memory_records(...)`
 4. `retrieve_original(...)`
 5. `generate_oracle_answer(...)`
-6. Recommended: `generate_online_answer(...)` (required by strict generation mode)
-
-Strict policy defaults:
-
-1. LLM judgement required for three probes (`require_llm_judgement=True`)
-2. Adapter-call errors are fail-fast (`strict_adapter_call=True`)
-3. Rule fallback disabled (`disable_rule_fallback=True`)
-4. Online answer required (`require_online_answer=True`)
-
-For debug-only relaxed runs, enable fallback flags in CLI:
-
-```powershell
-python scripts/run_eval_pipeline.py `
-  --memory-system o_mem `
-  --allow-rule-fallback `
-  --allow-adapter-fallback `
-  --allow-empty-online-answer
-```
-
-Quick smoke test (mock adapter):
-
-```powershell
-python scripts/test_eval_pipeline_mock.py
-```
+6. Recommended: `generate_online_answer(...)`
 
 ## Design Docs
 
@@ -392,3 +472,4 @@ python scripts/test_eval_pipeline_mock.py
 8. `docs/architecture/adapter-requirements-and-fidelity-protocol-bilingual-v0.6.1.md`
 9. `docs/architecture/three-probe-framework-implementation-bilingual-v0.6.1.md`
 10. `docs/architecture/one-memory-system-full-evaluation-flow-bilingual-v0.6.2.md`
+11. `docs/architecture/omem-membox-rerun-and-eval-runbook-zh-v0.2.md`

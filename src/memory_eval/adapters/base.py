@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from memory_eval.eval_core.high_recall import EncodingHighRecallRetriever
+
 from memory_eval.eval_core.utils import normalize_text
 
 
@@ -44,6 +46,7 @@ class BaseMemoryAdapter:
 
     def __init__(self) -> None:
         self._project_root = project_root()
+        self._external_high_recall_retriever: EncodingHighRecallRetriever | None = None
 
     def capabilities(self) -> Dict[str, Any]:
         return {
@@ -58,6 +61,12 @@ class BaseMemoryAdapter:
 
     def runtime_manifest(self) -> Dict[str, Any]:
         return {"family": self.family, "flavor": self.flavor, "capabilities": self.capabilities()}
+
+    def set_external_high_recall_retriever(self, retriever: EncodingHighRecallRetriever | None) -> None:
+        self._external_high_recall_retriever = retriever
+
+    def get_external_high_recall_retriever(self) -> EncodingHighRecallRetriever | None:
+        return self._external_high_recall_retriever
 
     def merge_runtime_credentials(
         self,

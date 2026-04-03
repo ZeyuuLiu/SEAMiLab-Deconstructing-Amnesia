@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Dict
 
 from memory_eval.eval_core.adapter_protocol import GenerationAdapterProtocol
+from memory_eval.eval_core.correctness_judge import CorrectnessJudgement, judge_answer_correctness
 from memory_eval.eval_core.llm_assist import LLMAssistConfig, llm_judge_generation_answer, llm_judge_generation_comparison
 from memory_eval.eval_core.models import EvalSample, EvaluatorConfig, ProbeResult
 from memory_eval.eval_core.utils import grounding_overlap, is_abstain, is_strict_llm_probe, normalize_text
@@ -81,17 +82,30 @@ def evaluate_generation_probe(inp: GenerationProbeInput, cfg: EvaluatorConfig) -
     strict = is_strict_llm_probe(cfg)
     llm_judgement: Dict[str, Any] | None = None
     llm_comparison: Dict[str, Any] | None = None
+    oracle_judgement = CorrectnessJudgement(False, None, False, "RULE", "", {})
+    online_judgement = CorrectnessJudgement(False, None, False, "RULE", "", {})
     if strict:
         correct = False
         online_correct = False
     else:
-        correct = _is_correct_rule(inp)
-        if inp.task_type == "NEG":
-            online_correct = is_abstain(inp.answer_online)
-        else:
-            online_norm = normalize_text(inp.answer_online)
-            gold_norm = normalize_text(inp.answer_gold)
-            online_correct = bool(gold_norm) and (online_norm == gold_norm or gold_norm in online_norm)
+        oracle_judgement = judge_answer_correctness(
+            task_type=inp.task_type,
+            question=inp.question,
+            answer_gold=inp.answer_gold,
+            answer_pred=inp.answer_oracle,
+            cfg=cfg,
+            oracle_context=inp.oracle_context,
+        )
+        online_judgement = judge_answer_correctness(
+            task_type=inp.task_type,
+            question=inp.question,
+            answer_gold=inp.answer_gold,
+            answer_pred=inp.answer_online,
+            cfg=cfg,
+            oracle_context=inp.oracle_context,
+        )
+        correct = oracle_judgement.final_correct
+        online_correct = online_judgement.final_correct
 
     llm_must = bool(cfg.use_llm_assist and cfg.require_llm_judgement)
 
@@ -154,6 +168,18 @@ def evaluate_generation_probe(inp: GenerationProbeInput, cfg: EvaluatorConfig) -
                 "answer_gold": inp.answer_gold,
                 "online_correct": online_correct,
                 "oracle_correct": True,
+                "online_correctness": {
+                    "rule_correct": online_judgement.rule_correct,
+                    "llm_correct": online_judgement.llm_correct,
+                    "final_correct": online_judgement.final_correct,
+                    "judge_reason": online_judgement.judge_reason,
+                },
+                "oracle_correctness": {
+                    "rule_correct": oracle_judgement.rule_correct,
+                    "llm_correct": oracle_judgement.llm_correct,
+                    "final_correct": oracle_judgement.final_correct,
+                    "judge_reason": oracle_judgement.judge_reason,
+                },
                 "comparative_judgement": (
                     llm_comparison.get("comparative_judgement", {})
                     if isinstance(llm_comparison, dict)
@@ -194,6 +220,18 @@ def evaluate_generation_probe(inp: GenerationProbeInput, cfg: EvaluatorConfig) -
                 "answer_gold": inp.answer_gold,
                 "online_correct": online_correct,
                 "oracle_correct": False,
+                "online_correctness": {
+                    "rule_correct": online_judgement.rule_correct,
+                    "llm_correct": online_judgement.llm_correct,
+                    "final_correct": online_judgement.final_correct,
+                    "judge_reason": online_judgement.judge_reason,
+                },
+                "oracle_correctness": {
+                    "rule_correct": oracle_judgement.rule_correct,
+                    "llm_correct": oracle_judgement.llm_correct,
+                    "final_correct": oracle_judgement.final_correct,
+                    "judge_reason": oracle_judgement.judge_reason,
+                },
                 "comparative_judgement": (
                     llm_comparison.get("comparative_judgement", {})
                     if isinstance(llm_comparison, dict)
@@ -217,6 +255,18 @@ def evaluate_generation_probe(inp: GenerationProbeInput, cfg: EvaluatorConfig) -
                 "answer_gold": inp.answer_gold,
                 "online_correct": online_correct,
                 "oracle_correct": False,
+                "online_correctness": {
+                    "rule_correct": online_judgement.rule_correct,
+                    "llm_correct": online_judgement.llm_correct,
+                    "final_correct": online_judgement.final_correct,
+                    "judge_reason": online_judgement.judge_reason,
+                },
+                "oracle_correctness": {
+                    "rule_correct": oracle_judgement.rule_correct,
+                    "llm_correct": oracle_judgement.llm_correct,
+                    "final_correct": oracle_judgement.final_correct,
+                    "judge_reason": oracle_judgement.judge_reason,
+                },
                 "comparative_judgement": (
                     llm_comparison.get("comparative_judgement", {})
                     if isinstance(llm_comparison, dict)
@@ -247,6 +297,18 @@ def evaluate_generation_probe(inp: GenerationProbeInput, cfg: EvaluatorConfig) -
                 "answer_gold": inp.answer_gold,
                 "online_correct": online_correct,
                 "oracle_correct": False,
+                "online_correctness": {
+                    "rule_correct": online_judgement.rule_correct,
+                    "llm_correct": online_judgement.llm_correct,
+                    "final_correct": online_judgement.final_correct,
+                    "judge_reason": online_judgement.judge_reason,
+                },
+                "oracle_correctness": {
+                    "rule_correct": oracle_judgement.rule_correct,
+                    "llm_correct": oracle_judgement.llm_correct,
+                    "final_correct": oracle_judgement.final_correct,
+                    "judge_reason": oracle_judgement.judge_reason,
+                },
                 "comparative_judgement": (
                     llm_comparison.get("comparative_judgement", {})
                     if isinstance(llm_comparison, dict)
@@ -273,6 +335,18 @@ def evaluate_generation_probe(inp: GenerationProbeInput, cfg: EvaluatorConfig) -
                     "answer_gold": inp.answer_gold,
                     "online_correct": online_correct,
                     "oracle_correct": False,
+                    "online_correctness": {
+                        "rule_correct": online_judgement.rule_correct,
+                        "llm_correct": online_judgement.llm_correct,
+                        "final_correct": online_judgement.final_correct,
+                        "judge_reason": online_judgement.judge_reason,
+                    },
+                    "oracle_correctness": {
+                        "rule_correct": oracle_judgement.rule_correct,
+                        "llm_correct": oracle_judgement.llm_correct,
+                        "final_correct": oracle_judgement.final_correct,
+                        "judge_reason": oracle_judgement.judge_reason,
+                    },
                     "comparative_judgement": (
                         llm_comparison.get("comparative_judgement", {})
                         if isinstance(llm_comparison, dict)
@@ -303,6 +377,18 @@ def evaluate_generation_probe(inp: GenerationProbeInput, cfg: EvaluatorConfig) -
             "answer_gold": inp.answer_gold,
             "online_correct": online_correct,
             "oracle_correct": False,
+            "online_correctness": {
+                "rule_correct": online_judgement.rule_correct,
+                "llm_correct": online_judgement.llm_correct,
+                "final_correct": online_judgement.final_correct,
+                "judge_reason": online_judgement.judge_reason,
+            },
+            "oracle_correctness": {
+                "rule_correct": oracle_judgement.rule_correct,
+                "llm_correct": oracle_judgement.llm_correct,
+                "final_correct": oracle_judgement.final_correct,
+                "judge_reason": oracle_judgement.judge_reason,
+            },
             "comparative_judgement": (
                 llm_comparison.get("comparative_judgement", {})
                 if isinstance(llm_comparison, dict)

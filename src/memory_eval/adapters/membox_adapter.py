@@ -26,6 +26,7 @@ class MemboxAdapterConfig:
     top_k_retrieve: Optional[int] = None
     answer_top_n: int = 5
     text_modes: Optional[List[str]] = None
+    request_timeout_sec: float = 120.0
 
 
 class MemboxAdapter(BaseMemoryAdapter):
@@ -53,6 +54,7 @@ class MemboxAdapter(BaseMemoryAdapter):
             top_k_retrieve=cfg.top_k_retrieve,
             answer_top_n=cfg.answer_top_n,
             text_modes=cfg.text_modes,
+            request_timeout_sec=cfg.request_timeout_sec,
         )
         self._membox_root = self._resolve_membox_root(self.config.membox_root)
         self._module = self._load_membox_module()
@@ -79,21 +81,8 @@ class MemboxAdapter(BaseMemoryAdapter):
             encoding="utf-8",
         )
 
-        cfg = self._module.Config
-        cfg.API_KEY = self.config.api_key
-        cfg.BASE_URL = self.config.base_url
-        cfg.LLM_MODEL = self.config.llm_model
-        cfg.EMBEDDING_MODEL = self.config.embedding_model
-        cfg.RAW_DATA_FILE = str(raw_data_path)
-        cfg.OUTPUT_BASE_DIR = str(output_root)
-        cfg.LIMIT_CONVERSATIONS = 1
-        cfg.LIMIT_SESSIONS = None
-        cfg.TOP_K_RETRIEVE = self.config.top_k_retrieve
-        cfg.ANSWER_TOP_N = int(self.config.answer_top_n or 5)
-        cfg.GEN_TEXT_MODES = list(self.config.text_modes or ["content_trace_event"])
-        cfg.apply_run_id(run_id)
-
-        worker = self._module.LLMWorker()
+        cfg = self._apply_runtime_config(raw_data_path=raw_data_path, output_root=output_root, run_id=run_id)
+        worker = self._build_worker()
         builder = self._module.MemoryBuilder(worker)
         boxes = builder.build_all()
         if not cfg.CHECKPOINT_EVERY_SAMPLE:
@@ -104,25 +93,16 @@ class MemboxAdapter(BaseMemoryAdapter):
             linker = self._module.TraceLinker(worker, trace_metrics=cfg.TRACE_METRICS)
             linker.run()
 
-        retriever = self._module.SimpleRetriever(worker, top_k=cfg.TOP_K_RETRIEVE)
-        retriever.load()
-
-        return {
-            "sample_id": sample_id,
-            "conversation": turns,
-            "raw_data_path": str(raw_data_path),
-            "output_root": str(output_root),
-            "run_id": run_id,
-            "worker": worker,
-            "retriever": retriever,
-            "config_snapshot": {
-                "llm_model": cfg.LLM_MODEL,
-                "embedding_model": cfg.EMBEDDING_MODEL,
-                "output_dir": cfg.OUTPUT_DIR,
-                "final_content_file": cfg.FINAL_CONTENT_FILE,
-                "time_trace_file": cfg.TIME_TRACE_FILE,
-            },
-        }
+        retriever = self._build_retriever(worker, cfg.TOP_K_RETRIEVE)
+        return self._create_runtime_context(
+            sample_id=sample_id,
+            turns=turns,
+            raw_data_path=raw_data_path,
+            output_root=output_root,
+            run_id=run_id,
+            worker=worker,
+            retriever=retriever,
+        )
 
     def capabilities(self) -> Dict[str, Any]:
         out = super().capabilities()
@@ -135,9 +115,42 @@ class MemboxAdapter(BaseMemoryAdapter):
                 "supports_online_generation": True,
                 "supports_high_recall_candidates": True,
                 "requires_remote_llm": True,
+                "supports_build_artifact_reuse": True,
             }
         )
         return out
+
+    def export_build_artifact(self, run_ctx: Any) -> Dict[str, Any]:
+        return {
+            "sample_id": str(run_ctx.get("sample_id", "")),
+            "run_id": str(run_ctx.get("run_id", "")),
+            "raw_data_path": str(run_ctx.get("raw_data_path", "")),
+            "output_root": str(run_ctx.get("output_root", "")),
+            "config_snapshot": dict(run_ctx.get("config_snapshot", {})),
+        }
+
+    def load_build_artifact(self, manifest: Dict[str, Any]) -> Any:
+        sample_id = str(manifest.get("sample_id", "")).strip()
+        run_id = str(manifest.get("run_id", "")).strip()
+        raw_data_path = Path(str(manifest.get("raw_data_path", "")).strip()).resolve()
+        output_root = Path(str(manifest.get("output_root", "")).strip()).resolve()
+        if not sample_id or not run_id:
+            raise ValueError("membox build artifact missing sample_id or run_id")
+        if not raw_data_path.exists():
+            raise FileNotFoundError(f"membox build artifact raw_data_path not found: {raw_data_path}")
+        cfg = self._apply_runtime_config(raw_data_path=raw_data_path, output_root=output_root, run_id=run_id)
+        worker = self._build_worker()
+        retriever = self._build_retriever(worker, cfg.TOP_K_RETRIEVE)
+        turns = self.normalize_turns(self._read_turns_from_raw_data(raw_data_path))
+        return self._create_runtime_context(
+            sample_id=sample_id,
+            turns=turns,
+            raw_data_path=raw_data_path,
+            output_root=output_root,
+            run_id=run_id,
+            worker=worker,
+            retriever=retriever,
+        )
 
     def build_trace_for_query(self, run_ctx: Any, query: str, oracle_context: str, top_k: int) -> AdapterTrace:
         memory_view = self.export_full_memory(run_ctx)
@@ -314,6 +327,131 @@ class MemboxAdapter(BaseMemoryAdapter):
         if configured:
             return Path(configured).resolve()
         return Path(__file__).resolve().parents[3] / "system" / "Membox_stableEval"
+
+    def _apply_runtime_config(self, *, raw_data_path: Path, output_root: Path, run_id: str):
+        cfg = self._module.Config
+        cfg.API_KEY = self.config.api_key
+        cfg.BASE_URL = self.config.base_url
+        cfg.LLM_MODEL = self.config.llm_model
+        cfg.EMBEDDING_MODEL = self.config.embedding_model
+        cfg.RAW_DATA_FILE = str(raw_data_path)
+        cfg.OUTPUT_BASE_DIR = str(output_root)
+        cfg.LIMIT_CONVERSATIONS = 1
+        cfg.LIMIT_SESSIONS = None
+        cfg.TOP_K_RETRIEVE = self.config.top_k_retrieve
+        cfg.ANSWER_TOP_N = int(self.config.answer_top_n or 5)
+        cfg.GEN_TEXT_MODES = list(self.config.text_modes or ["content_trace_event"])
+        cfg.apply_run_id(run_id)
+        return cfg
+
+    def _build_worker(self):
+        worker = self._module.LLMWorker()
+        timeout = float(self.config.request_timeout_sec or 0.0)
+        if timeout <= 0:
+            return worker
+
+        def get_embedding(text, note="Emb"):
+            try:
+                if not text:
+                    return [0.0] * 1536
+                resp = worker.client.embeddings.create(
+                    input=str(text).replace("\n", " "),
+                    model=self._module.Config.EMBEDDING_MODEL,
+                    timeout=timeout,
+                )
+                emb = None
+                try:
+                    emb = resp.data[0].embedding
+                except Exception:
+                    emb = None
+                return emb if emb is not None else [0.0] * 1536
+            except Exception:
+                return [0.0] * 1536
+
+        def chat_completion(prompt, note="Completion", json_mode=False, extra=None):
+            try:
+                kwargs = {
+                    "model": self._module.Config.LLM_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.0,
+                    "timeout": timeout,
+                }
+                if json_mode:
+                    kwargs["response_format"] = {"type": "json_object"}
+                resp = worker.client.chat.completions.create(**kwargs)
+                extra_payload = {"prompt_tokens_est": worker.count_tokens(prompt)}
+                if extra:
+                    extra_payload.update(extra)
+                self._module.TokenAnalyzer.log_usage(resp.usage, note, extra_payload)
+                return resp.choices[0].message.content.strip()
+            except Exception:
+                return "{}" if json_mode else ""
+
+        worker.get_embedding = get_embedding
+        worker.chat_completion = chat_completion
+        return worker
+
+    def _build_retriever(self, worker: Any, top_k: Optional[int]):
+        retriever = self._module.SimpleRetriever(worker, top_k=top_k)
+        retriever.load()
+        return retriever
+
+    def _create_runtime_context(
+        self,
+        *,
+        sample_id: str,
+        turns: List[Dict[str, Any]],
+        raw_data_path: Path,
+        output_root: Path,
+        run_id: str,
+        worker: Any,
+        retriever: Any,
+    ) -> Dict[str, Any]:
+        cfg = self._module.Config
+        return {
+            "sample_id": sample_id,
+            "conversation": turns,
+            "raw_data_path": str(raw_data_path),
+            "output_root": str(output_root),
+            "run_id": run_id,
+            "worker": worker,
+            "retriever": retriever,
+            "config_snapshot": {
+                "llm_model": cfg.LLM_MODEL,
+                "embedding_model": cfg.EMBEDDING_MODEL,
+                "output_dir": cfg.OUTPUT_DIR,
+                "final_content_file": cfg.FINAL_CONTENT_FILE,
+                "time_trace_file": cfg.TIME_TRACE_FILE,
+            },
+        }
+
+    def _read_turns_from_raw_data(self, raw_data_path: Path) -> List[Dict[str, Any]]:
+        payload = json.loads(raw_data_path.read_text(encoding="utf-8"))
+        if not payload:
+            return []
+        conv = payload[0].get("conversation", {})
+        turns: List[Dict[str, Any]] = []
+        turn_index = 0
+        for key in sorted(conv.keys()):
+            if not str(key).startswith("session_") or str(key).endswith("_date_time"):
+                continue
+            session_turns = conv.get(key, [])
+            timestamp = str(conv.get(f"{key}_date_time", "")).strip()
+            if not isinstance(session_turns, list):
+                continue
+            for turn in session_turns:
+                if not isinstance(turn, dict):
+                    continue
+                turns.append(
+                    {
+                        "turn_index": turn_index,
+                        "speaker": str(turn.get("speaker", "")).strip(),
+                        "text": str(turn.get("text", "")).strip(),
+                        "timestamp": timestamp,
+                    }
+                )
+                turn_index += 1
+        return turns
 
     def _load_membox_module(self):
         module_path = self._membox_root / "membox.py"

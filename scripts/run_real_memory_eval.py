@@ -15,9 +15,9 @@ if str(PROJECT_ROOT / "src") not in sys.path:
 
 from memory_eval.adapters import create_adapter_by_system, export_adapter_runtime_manifest, load_runtime_credentials
 from memory_eval.dataset.locomo_builder import build_locomo_eval_samples
+from memory_eval.eval_core.correctness_judge import judge_answer_correctness
 from memory_eval.eval_core.models import EvaluatorConfig
-from memory_eval.pipeline.runner import PipelineConfig, ThreeProbeEvaluationPipeline
-from memory_eval.eval_core.utils import normalize_text
+from memory_eval.pipeline.runner import PipelineConfig, ThreeProbeEvaluationPipeline, _conversation_to_turns
 
 
 def parse_args() -> argparse.Namespace:
@@ -26,8 +26,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset", default="data/locomo10.json")
     parser.add_argument("--sample-id", default="", help="Optional LOCOMO sample_id filter")
     parser.add_argument("--limit", type=int, default=None)
-    parser.add_argument("--mode", choices=["baseline", "eval"], default="eval")
+    parser.add_argument("--mode", choices=["build", "baseline", "eval"], default="eval")
     parser.add_argument("--output", default="")
+    parser.add_argument("--build-manifest", default="")
     parser.add_argument("--keys-path", default=str(PROJECT_ROOT / "configs" / "keys.local.json"))
     parser.add_argument("--top-k", type=int, default=10)
     parser.add_argument("--embedding-model-path", default="")
@@ -37,6 +38,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--allow-fallback-lightweight", action="store_true")
     parser.add_argument("--llm-assist", action="store_true")
     parser.add_argument("--strict-judge", action="store_true")
+    parser.add_argument("--allow-correctness-rule-fallback", action="store_true")
+    parser.add_argument("--request-timeout-sec", type=float, default=120.0)
     return parser.parse_args()
 
 
@@ -75,13 +78,88 @@ def build_adapter_config(args: argparse.Namespace) -> Dict[str, Any]:
             cfg["omem_root"] = args.omem_root
     if "membox" in key and args.membox_root:
         cfg["membox_root"] = args.membox_root
+    if "membox" in key:
+        cfg["request_timeout_sec"] = float(args.request_timeout_sec)
     return cfg
+
+
+def _load_build_manifest_by_sample(path: str) -> Dict[str, Dict[str, Any]]:
+    if not path:
+        return {}
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    artifacts = raw.get("artifacts", raw if isinstance(raw, list) else [])
+    out: Dict[str, Dict[str, Any]] = {}
+    for item in artifacts:
+        if not isinstance(item, dict):
+            continue
+        sample_id = str(item.get("sample_id", "")).strip()
+        if sample_id:
+            out[sample_id] = item
+    return out
+
+
+def _build_eval_cfg(args: argparse.Namespace, adapter: Any) -> EvaluatorConfig:
+    return EvaluatorConfig(
+        use_llm_assist=bool(args.llm_assist),
+        require_llm_judgement=bool(args.strict_judge),
+        disable_rule_fallback=bool(args.strict_judge),
+        strict_adapter_call=True,
+        require_online_answer=False,
+        llm_api_key=getattr(adapter.config, "api_key", ""),
+        llm_base_url=getattr(adapter.config, "base_url", ""),
+        llm_model=getattr(adapter.config, "llm_model", "gpt-4o-mini"),
+        correctness_use_llm_judge=True,
+        correctness_require_llm_judge=not bool(args.allow_correctness_rule_fallback),
+    )
+
+
+def run_build(args: argparse.Namespace, dataset_path: Path, adapter: Any) -> Path:
+    samples = build_locomo_eval_samples(str(dataset_path), limit=args.limit)
+    episodes = json.loads(dataset_path.read_text(encoding="utf-8"))
+    by_sample = {str(ep.get("sample_id", "")).strip(): ep for ep in episodes}
+    artifacts: List[Dict[str, Any]] = []
+    run_ctx_cache: Dict[str, Any] = {}
+    export_fn = getattr(adapter, "export_build_artifact", None)
+    if not callable(export_fn):
+        raise RuntimeError(f"{adapter.__class__.__name__} does not support build artifact export")
+    for sample in samples:
+        sample_id = sample.sample_id
+        if sample_id in run_ctx_cache:
+            continue
+        episode = by_sample.get(sample_id)
+        if not episode:
+            continue
+        run_ctx = adapter.ingest_conversation(sample_id, _conversation_to_turns(episode.get("conversation", {})))
+        run_ctx_cache[sample_id] = run_ctx
+        artifact = dict(export_fn(run_ctx))
+        artifact["sample_id"] = sample_id
+        artifacts.append(artifact)
+        print(json.dumps({"event": "build_done", "sample_id": sample_id, "run_id": artifact.get("run_id", "")}, ensure_ascii=False), flush=True)
+    out_path = Path(args.output) if args.output else PROJECT_ROOT / "outputs" / f"{args.memory_system}_build_manifest.json"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(
+        json.dumps(
+            {
+                "memory_system": args.memory_system,
+                "mode": "build",
+                "sample_filter": args.sample_id,
+                "count": len(artifacts),
+                "artifacts": artifacts,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return out_path
 
 
 def run_baseline(args: argparse.Namespace, dataset_path: Path, adapter: Any) -> Path:
     samples = build_locomo_eval_samples(str(dataset_path), limit=args.limit)
     episodes = json.loads(dataset_path.read_text(encoding="utf-8"))
     by_sample = {str(ep.get("sample_id", "")).strip(): ep for ep in episodes}
+    build_manifest = _load_build_manifest_by_sample(args.build_manifest)
+    cfg = _build_eval_cfg(args, adapter)
     results: List[Dict[str, Any]] = []
     correct = 0
     total = 0
@@ -89,50 +167,69 @@ def run_baseline(args: argparse.Namespace, dataset_path: Path, adapter: Any) -> 
     for sample in samples:
         sample_id = sample.sample_id
         if sample_id not in run_ctx_cache:
-            episode = by_sample.get(sample_id)
-            if not episode:
-                continue
-            flattened = []
-            conversation = episode.get("conversation", {})
-            turn_index = 0
-            for key, turns in conversation.items():
-                if not key.startswith("session_") or not isinstance(turns, list):
+            if sample_id in build_manifest and callable(getattr(adapter, "load_build_artifact", None)):
+                run_ctx_cache[sample_id] = adapter.load_build_artifact(build_manifest[sample_id])
+            else:
+                episode = by_sample.get(sample_id)
+                if not episode:
                     continue
-                for turn in turns:
-                    flattened.append(
-                        {
-                            "turn_index": turn_index,
-                            "speaker": str(turn.get("speaker", "")).strip(),
-                            "text": str(turn.get("text", "")).strip(),
-                        }
-                    )
-                    turn_index += 1
-            run_ctx_cache[sample_id] = adapter.ingest_conversation(sample_id, flattened)
+                run_ctx_cache[sample_id] = adapter.ingest_conversation(sample_id, _conversation_to_turns(episode.get("conversation", {})))
         run_ctx = run_ctx_cache[sample_id]
-        answer_online = adapter.generate_online_answer(run_ctx, sample.question)
-        online_norm = normalize_text(answer_online)
-        gold_norm = normalize_text(sample.answer_gold)
-        is_correct = bool(gold_norm) and (online_norm == gold_norm or gold_norm in online_norm or online_norm in gold_norm)
+        print(
+            json.dumps(
+                {"event": "baseline_question_start", "sample_id": sample.sample_id, "question_id": sample.question_id, "task_type": sample.task_type},
+                ensure_ascii=False,
+            ),
+            flush=True,
+        )
+        answer_online = adapter.generate_online_answer(run_ctx, sample.question, args.top_k)
+        judgement = judge_answer_correctness(
+            task_type=sample.task_type,
+            question=sample.question,
+            answer_gold=sample.answer_gold,
+            answer_pred=answer_online,
+            cfg=cfg,
+            oracle_context=sample.oracle_context,
+        )
+        is_correct = bool(judgement.final_correct)
         total += 1
         correct += int(is_correct)
-        results.append(
-            {
-                "sample_id": sample.sample_id,
-                "question_id": sample.question_id,
-                "task_type": sample.task_type,
-                "question": sample.question,
-                "answer_gold": sample.answer_gold,
-                "answer_online": answer_online,
-                "correct": is_correct,
-            }
+        row = {
+            "sample_id": sample.sample_id,
+            "question_id": sample.question_id,
+            "task_type": sample.task_type,
+            "question": sample.question,
+            "answer_gold": sample.answer_gold,
+            "answer_online": answer_online,
+            "rule_correct": judgement.rule_correct,
+            "llm_correct": judgement.llm_correct,
+            "final_correct": judgement.final_correct,
+            "judge_label": judgement.judge_label,
+            "judge_reason": judgement.judge_reason,
+            "judge_payload": judgement.judge_payload,
+        }
+        results.append(row)
+        print(
+            json.dumps(
+                {
+                    "event": "baseline_question_done",
+                    "sample_id": sample.sample_id,
+                    "question_id": sample.question_id,
+                    "answer_online": answer_online,
+                    "final_correct": row["final_correct"],
+                    "judge_label": row["judge_label"],
+                },
+                ensure_ascii=False,
+            ),
+            flush=True,
         )
     summary = {
         "memory_system": args.memory_system,
         "mode": "baseline",
         "sample_filter": args.sample_id,
         "count": total,
-        "correct": correct,
-        "accuracy": (correct / total) if total else 0.0,
+        "final_correct": correct,
+        "final_accuracy": (correct / total) if total else 0.0,
         "adapter_manifest": export_adapter_runtime_manifest(adapter),
     }
     out_path = Path(args.output) if args.output else PROJECT_ROOT / "outputs" / f"{args.memory_system}_baseline.json"
@@ -142,16 +239,7 @@ def run_baseline(args: argparse.Namespace, dataset_path: Path, adapter: Any) -> 
 
 
 def run_eval(args: argparse.Namespace, dataset_path: Path, adapter: Any) -> Path:
-    cfg = EvaluatorConfig(
-        use_llm_assist=bool(args.llm_assist),
-        require_llm_judgement=bool(args.strict_judge),
-        disable_rule_fallback=bool(args.strict_judge),
-        strict_adapter_call=True,
-        require_online_answer=False,
-        llm_api_key=getattr(adapter.config, "api_key", ""),
-        llm_base_url=getattr(adapter.config, "base_url", ""),
-        llm_model=getattr(adapter.config, "llm_model", "gpt-4o-mini"),
-    )
+    cfg = _build_eval_cfg(args, adapter)
     out_path = Path(args.output) if args.output else PROJECT_ROOT / "outputs" / f"{args.memory_system}_eval.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     pipeline = ThreeProbeEvaluationPipeline(
@@ -161,6 +249,7 @@ def run_eval(args: argparse.Namespace, dataset_path: Path, adapter: Any) -> Path
             top_k=int(args.top_k),
             evaluator_config=cfg,
             limit=args.limit,
+            build_manifest_path=args.build_manifest,
         )
     )
     pipeline.run(adapter)
@@ -171,7 +260,12 @@ def main() -> None:
     args = parse_args()
     dataset_path = load_dataset((PROJECT_ROOT / args.dataset).resolve(), args.sample_id)
     adapter = create_adapter_by_system(args.memory_system, build_adapter_config(args))
-    out_path = run_baseline(args, dataset_path, adapter) if args.mode == "baseline" else run_eval(args, dataset_path, adapter)
+    if args.mode == "build":
+        out_path = run_build(args, dataset_path, adapter)
+    elif args.mode == "baseline":
+        out_path = run_baseline(args, dataset_path, adapter)
+    else:
+        out_path = run_eval(args, dataset_path, adapter)
     print(json.dumps({"ok": True, "memory_system": args.memory_system, "mode": args.mode, "output": str(out_path)}, ensure_ascii=False))
 
 
