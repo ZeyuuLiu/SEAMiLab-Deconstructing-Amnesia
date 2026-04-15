@@ -49,6 +49,13 @@ ABSTAIN_PATTERNS: Sequence[str] = (
     "not mentioned",
     "n/a",
     "none",
+    "不知道",
+    "不清楚",
+    "无法判断",
+    "无法回答",
+    "没有提到",
+    "未提及",
+    "没有相关信息",
 )
 
 

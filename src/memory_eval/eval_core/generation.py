@@ -23,6 +23,7 @@ class GenerationProbeInput:
     answer_oracle: str
     answer_gold: str
     task_type: str
+    retrieved_context: str = ""
 
 
 def evaluate_generation_probe_with_adapter(
@@ -49,6 +50,15 @@ def evaluate_generation_probe_with_adapter(
         raise RuntimeError("generation adapter missing generate_online_answer in strict mode")
     if cfg.require_online_answer and not answer_online.strip():
         raise RuntimeError("generation adapter returned empty online answer in strict mode")
+    retrieved_context = ""
+    retrieve_fn = getattr(adapter, "retrieve_original", None)
+    if callable(retrieve_fn):
+        try:
+            retrieved_context = _render_retrieved_context(retrieve_fn(run_ctx, sample.question, 5))
+        except Exception as exc:
+            if cfg.strict_adapter_call:
+                raise RuntimeError(f"generation retrieve_original failed: {exc}") from exc
+            retrieved_context = ""
     return evaluate_generation_probe(
         GenerationProbeInput(
             question=sample.question,
@@ -57,6 +67,7 @@ def evaluate_generation_probe_with_adapter(
             answer_oracle=str(answer_oracle or ""),
             answer_gold=sample.answer_gold,
             task_type=sample.task_type,
+            retrieved_context=retrieved_context,
         ),
         cfg=cfg,
     )
@@ -94,6 +105,7 @@ def evaluate_generation_probe(inp: GenerationProbeInput, cfg: EvaluatorConfig) -
             answer_gold=inp.answer_gold,
             answer_pred=inp.answer_oracle,
             cfg=cfg,
+            judge_mode="oracle",
             oracle_context=inp.oracle_context,
         )
         online_judgement = judge_answer_correctness(
@@ -102,7 +114,8 @@ def evaluate_generation_probe(inp: GenerationProbeInput, cfg: EvaluatorConfig) -
             answer_gold=inp.answer_gold,
             answer_pred=inp.answer_online,
             cfg=cfg,
-            oracle_context=inp.oracle_context,
+            judge_mode="online",
+            retrieved_context=inp.retrieved_context,
         )
         correct = oracle_judgement.final_correct
         online_correct = online_judgement.final_correct
@@ -126,8 +139,6 @@ def evaluate_generation_probe(inp: GenerationProbeInput, cfg: EvaluatorConfig) -
         )
         if cfg.require_llm_judgement and not isinstance(llm_judgement, dict):
             raise RuntimeError("generation llm answer judgement failed or empty")
-        if isinstance(llm_judgement, dict) and "correct" in llm_judgement:
-            correct = bool(llm_judgement.get("correct", False))
         llm_comparison = llm_judge_generation_comparison(
             LLMAssistConfig(
                 api_key=cfg.llm_api_key,
@@ -145,12 +156,7 @@ def evaluate_generation_probe(inp: GenerationProbeInput, cfg: EvaluatorConfig) -
         )
         if cfg.require_llm_judgement and not isinstance(llm_comparison, dict):
             raise RuntimeError("generation llm comparison judgement failed or empty")
-        if isinstance(llm_comparison, dict):
-            if "oracle_correct" in llm_comparison:
-                correct = bool(llm_comparison.get("oracle_correct", correct))
-            if "online_correct" in llm_comparison:
-                online_correct = bool(llm_comparison.get("online_correct", online_correct))
-        elif cfg.disable_rule_fallback:
+        if not isinstance(llm_comparison, dict) and cfg.disable_rule_fallback:
             raise RuntimeError("generation strict mode rejects rule fallback")
 
     overlap, overlap_meta = grounding_overlap(inp.answer_oracle, inp.oracle_context)
@@ -173,13 +179,16 @@ def evaluate_generation_probe(inp: GenerationProbeInput, cfg: EvaluatorConfig) -
                     "llm_correct": online_judgement.llm_correct,
                     "final_correct": online_judgement.final_correct,
                     "judge_reason": online_judgement.judge_reason,
+                    "judge_payload": online_judgement.judge_payload,
                 },
                 "oracle_correctness": {
                     "rule_correct": oracle_judgement.rule_correct,
                     "llm_correct": oracle_judgement.llm_correct,
                     "final_correct": oracle_judgement.final_correct,
                     "judge_reason": oracle_judgement.judge_reason,
+                    "judge_payload": oracle_judgement.judge_payload,
                 },
+                "retrieved_context": inp.retrieved_context,
                 "comparative_judgement": (
                     llm_comparison.get("comparative_judgement", {})
                     if isinstance(llm_comparison, dict)
@@ -225,13 +234,16 @@ def evaluate_generation_probe(inp: GenerationProbeInput, cfg: EvaluatorConfig) -
                     "llm_correct": online_judgement.llm_correct,
                     "final_correct": online_judgement.final_correct,
                     "judge_reason": online_judgement.judge_reason,
+                    "judge_payload": online_judgement.judge_payload,
                 },
                 "oracle_correctness": {
                     "rule_correct": oracle_judgement.rule_correct,
                     "llm_correct": oracle_judgement.llm_correct,
                     "final_correct": oracle_judgement.final_correct,
                     "judge_reason": oracle_judgement.judge_reason,
+                    "judge_payload": oracle_judgement.judge_payload,
                 },
+                "retrieved_context": inp.retrieved_context,
                 "comparative_judgement": (
                     llm_comparison.get("comparative_judgement", {})
                     if isinstance(llm_comparison, dict)
@@ -340,18 +352,21 @@ def evaluate_generation_probe(inp: GenerationProbeInput, cfg: EvaluatorConfig) -
                         "llm_correct": online_judgement.llm_correct,
                         "final_correct": online_judgement.final_correct,
                         "judge_reason": online_judgement.judge_reason,
+                        "judge_payload": online_judgement.judge_payload,
                     },
                     "oracle_correctness": {
                         "rule_correct": oracle_judgement.rule_correct,
                         "llm_correct": oracle_judgement.llm_correct,
                         "final_correct": oracle_judgement.final_correct,
                         "judge_reason": oracle_judgement.judge_reason,
+                        "judge_payload": oracle_judgement.judge_payload,
                     },
+                    "retrieved_context": inp.retrieved_context,
                     "comparative_judgement": (
-                        llm_comparison.get("comparative_judgement", {})
-                        if isinstance(llm_comparison, dict)
-                        else {}
-                    ),
+                    llm_comparison.get("comparative_judgement", {})
+                    if isinstance(llm_comparison, dict)
+                    else {}
+                ),
                     "llm_judgement": llm_judgement,
                     "llm_comparison": llm_comparison,
                     "overlap_meta": overlap_meta,
@@ -382,13 +397,16 @@ def evaluate_generation_probe(inp: GenerationProbeInput, cfg: EvaluatorConfig) -
                 "llm_correct": online_judgement.llm_correct,
                 "final_correct": online_judgement.final_correct,
                 "judge_reason": online_judgement.judge_reason,
+                "judge_payload": online_judgement.judge_payload,
             },
             "oracle_correctness": {
                 "rule_correct": oracle_judgement.rule_correct,
                 "llm_correct": oracle_judgement.llm_correct,
                 "final_correct": oracle_judgement.final_correct,
                 "judge_reason": oracle_judgement.judge_reason,
+                "judge_payload": oracle_judgement.judge_payload,
             },
+            "retrieved_context": inp.retrieved_context,
             "comparative_judgement": (
                 llm_comparison.get("comparative_judgement", {})
                 if isinstance(llm_comparison, dict)
@@ -399,3 +417,17 @@ def evaluate_generation_probe(inp: GenerationProbeInput, cfg: EvaluatorConfig) -
             "llm_comparison": llm_comparison,
         },
     )
+
+
+def _render_retrieved_context(items: Any) -> str:
+    if not isinstance(items, list):
+        return ""
+    lines = []
+    for idx, item in enumerate(items[:5], start=1):
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text", "") or item.get("content", "") or "").strip()
+        if not text:
+            continue
+        lines.append(f"[{idx}] {text}")
+    return "\n".join(lines)

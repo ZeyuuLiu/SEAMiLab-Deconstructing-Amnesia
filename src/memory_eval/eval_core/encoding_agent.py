@@ -189,17 +189,33 @@ class EncodingAgent:
             rk = self._encoding_merge_top_k(cfg, top_k)
             ro_fn = getattr(adapter, "retrieve_original", None)
             extra_records: List[Dict[str, Any]] = []
+            query_shadow_records: List[Dict[str, Any]] = []
+            f_key_shadow_records: List[Dict[str, Any]] = []
             try:
                 if callable(ro_fn):
-                    extra_records = self._normalize_records(ro_fn(run_ctx, sample.question, rk))
+                    query_shadow_records = self._normalize_records(ro_fn(run_ctx, sample.question, rk))
+                    f_key_query = self._compose_f_key_query(sample.f_key)
+                    if f_key_query:
+                        f_key_shadow_records = self._normalize_records(ro_fn(run_ctx, f_key_query, rk))
                 elif retrieval_adapter is not None:
-                    extra_records = self._normalize_records(retrieval_adapter.retrieve_original(run_ctx, sample.question, rk))
+                    query_shadow_records = self._normalize_records(retrieval_adapter.retrieve_original(run_ctx, sample.question, rk))
+                    f_key_query = self._compose_f_key_query(sample.f_key)
+                    if f_key_query:
+                        f_key_shadow_records = self._normalize_records(retrieval_adapter.retrieve_original(run_ctx, f_key_query, rk))
             except Exception as exc:
                 if cfg.strict_adapter_call:
                     raise RuntimeError(f"encoding merge retrieve_original failed: {exc}") from exc
                 observability_notes.append(f"retrieve_original merge failed: {exc}")
+            extra_records = self._merge_records(query_shadow_records, f_key_shadow_records)
+            if query_shadow_records:
+                native_retrieval_shadow.extend(
+                    self._records_to_observations(query_shadow_records, "native_retrieval_shadow", "retrieve_original_query")
+                )
+            if f_key_shadow_records:
+                native_retrieval_shadow.extend(
+                    self._records_to_observations(f_key_shadow_records, "native_retrieval_shadow", "retrieve_original_f_key")
+                )
             if extra_records:
-                native_retrieval_shadow = self._records_to_observations(extra_records, "native_retrieval_shadow", "retrieve_original")
                 native_candidate_records = self._merge_records(native_candidate_records, extra_records)
         if not native_candidate_records and memory_corpus and not (cfg and cfg.disable_rule_fallback):
             fallback_records = self._fallback_find_records(sample.question, sample.f_key, memory_corpus)
@@ -217,6 +233,8 @@ class EncodingAgent:
             "native_candidate_count": len(native_candidate_view),
             "framework_candidate_count": len(framework_candidate_view),
             "retrieval_shadow_count": len(native_retrieval_shadow),
+            "query_retrieval_shadow_count": sum(1 for obs in native_retrieval_shadow if obs.source_name == "retrieve_original_query"),
+            "f_key_retrieval_shadow_count": sum(1 for obs in native_retrieval_shadow if obs.source_name == "retrieve_original_f_key"),
             "combined_candidate_count": len(combined_candidates),
             "candidate_group_count": len(candidate_groups),
             "used_external_high_recall_retriever": any(
@@ -652,3 +670,9 @@ class EncodingAgent:
             tokens = re.findall(r"[\w\u4e00-\u9fff]+", norm_text)
             return norm_fact in tokens
         return norm_fact == norm_text or norm_fact in norm_text
+
+    def _compose_f_key_query(self, f_key: List[str]) -> str:
+        chunks = [str(item).strip() for item in f_key if str(item).strip()]
+        if not chunks:
+            return ""
+        return " ; ".join(chunks[:5])

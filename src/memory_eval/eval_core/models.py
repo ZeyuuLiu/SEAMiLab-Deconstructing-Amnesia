@@ -208,8 +208,8 @@ class EvaluatorConfig:
     llm_temperature: float = 0.0
     llm_api_key: str = ""
     llm_base_url: str = "https://vip.dmxapi.com/v1"
-    correctness_use_llm_judge: bool = True
-    correctness_require_llm_judge: bool = True
+    correctness_use_llm_judge: bool = False
+    correctness_require_llm_judge: bool = False
     # Strict execution policy is opt-in.
     # 严格执行策略改为显式开启，避免无 API key 时开箱即失败。
     require_llm_judgement: bool = False

@@ -71,6 +71,7 @@ def main() -> int:
         parsed = json.load(f)
     assert "results" in parsed and isinstance(parsed["results"], list), "missing results list"
     assert "question_index" in parsed and len(parsed["question_index"]) == 2, "missing question index"
+    assert parsed.get("errors") == [], "unexpected eval errors in mock pipeline"
     first_result_file = run_dir / parsed["question_index"][0]["result_file"]
     assert first_result_file.exists(), "per-question json not written"
     print("Eval pipeline mock test PASSED.")

@@ -10,6 +10,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from memory_eval.eval_core import HighRecallRequest, HighRecallResponse
+from memory_eval.eval_core.correctness_judge import judge_answer_correctness
 from memory_eval.eval_core.encoding import EncodingProbeInput
 from memory_eval.eval_core.encoding_agent import EncodingAgent
 from memory_eval.eval_core.engine import ParallelThreeProbeEvaluator
@@ -75,6 +76,13 @@ class MockHighRecallRetriever:
             candidates=[{"id": "ext-1", "text": "昨天 Caroline 去了 LGBTQ support group。", "score": 1.0, "meta": {"source": "external"}}],
             diagnostics={"provider": "mock"},
         )
+
+
+class QueryAwareAdapter(MockFullAdapter):
+    def retrieve_original(self, run_ctx, query, top_k):
+        if "LGBTQ support group" in str(query):
+            return [{"id": "rk-1", "text": "LGBTQ support group", "score": 0.95, "meta": {"query_type": "f_key"}}]
+        return [{"id": "rq-1", "text": "昨天 Caroline 去了 LGBTQ support group。", "score": 0.9, "meta": {"query_type": "question"}}]
 
 
 class EvalAgentTests(unittest.TestCase):
@@ -176,6 +184,45 @@ class EvalAgentTests(unittest.TestCase):
         self.assertEqual(result.state, "PASS")
         self.assertEqual(result.evidence.get("agent_name"), "GenerationAgent")
 
+    def test_correctness_judge_pos_refusal_hard_veto(self):
+        judgement = judge_answer_correctness(
+            task_type="POS",
+            question=self.pos_sample.question,
+            answer_gold=self.pos_sample.answer_gold,
+            answer_pred="不知道",
+            cfg=self.cfg,
+            judge_mode="online",
+            retrieved_context="",
+        )
+        self.assertFalse(judgement.final_correct)
+        self.assertTrue(judgement.judge_payload["hard_veto"])
+        self.assertFalse(judgement.rule_correct)
+
+    def test_correctness_judge_falls_back_to_rule_when_llm_unavailable(self):
+        cfg = EvaluatorConfig(
+            use_llm_assist=False,
+            require_llm_judgement=False,
+            disable_rule_fallback=False,
+            strict_adapter_call=False,
+            require_online_answer=False,
+            correctness_use_llm_judge=True,
+            correctness_require_llm_judge=False,
+            llm_api_key="",
+            llm_base_url="",
+        )
+        judgement = judge_answer_correctness(
+            task_type="POS",
+            question=self.pos_sample.question,
+            answer_gold=self.pos_sample.answer_gold,
+            answer_pred=self.pos_sample.answer_gold,
+            cfg=cfg,
+            judge_mode="online",
+            retrieved_context="",
+        )
+        self.assertTrue(judgement.final_correct)
+        self.assertEqual(judgement.judge_label, "RULE_FALLBACK")
+        self.assertFalse(judgement.judge_payload["llm_available"])
+
     def test_attribution_agent_suppresses_rf_when_encoding_miss(self):
         evaluator = ParallelThreeProbeEvaluator(config=self.cfg)
         adapter = MockFullAdapter(
@@ -229,6 +276,20 @@ class EvalAgentTests(unittest.TestCase):
         bundle = agent.collect_observations(self.pos_sample, adapter, run_ctx={})
         self.assertTrue(bundle.coverage_report["used_external_high_recall_retriever"])
         self.assertTrue(any(obs.source_name == "external_high_recall_retriever" for obs in bundle.native_candidate_view))
+
+    def test_encoding_agent_merges_query_and_f_key_retrieval_shadow(self):
+        agent = EncodingAgent()
+        adapter = QueryAwareAdapter(
+            memory_view=[{"id": "m1", "text": "昨天 Caroline 去了 LGBTQ support group。", "meta": {}}],
+            retrieved_items=[],
+            online_answer="",
+            oracle_answer="",
+        )
+        bundle = agent.collect_observations(self.pos_sample, adapter, run_ctx={}, cfg=self.cfg)
+        self.assertEqual(bundle.coverage_report["query_retrieval_shadow_count"], 1)
+        self.assertEqual(bundle.coverage_report["f_key_retrieval_shadow_count"], 1)
+        self.assertTrue(any(obs.source_name == "retrieve_original_query" for obs in bundle.native_retrieval_shadow))
+        self.assertTrue(any(obs.source_name == "retrieve_original_f_key" for obs in bundle.native_retrieval_shadow))
 
 
 if __name__ == "__main__":

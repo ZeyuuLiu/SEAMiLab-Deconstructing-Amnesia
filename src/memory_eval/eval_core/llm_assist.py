@@ -236,6 +236,7 @@ def llm_judge_answer_correctness(
     question: str,
     answer_gold: str,
     answer_pred: str,
+    judge_mode: str = "online",
     oracle_context: str = "",
     retrieved_context: str = "",
     must_succeed: bool = False,
@@ -247,6 +248,7 @@ def llm_judge_answer_correctness(
             question=question,
             answer_gold=answer_gold,
             answer_pred=answer_pred,
+            judge_mode=judge_mode,
             oracle_context=oracle_context,
             retrieved_context=retrieved_context,
         ),
@@ -257,4 +259,7 @@ def llm_judge_answer_correctness(
     label = str(payload.get("label", "")).strip().upper()
     payload["label"] = label
     payload["correct"] = label == "CORRECT"
+    payload["judge_mode"] = str(judge_mode or "online")
+    for key in ("semantic_match", "temporal_match", "refusal_expected", "refusal_present", "fabricated"):
+        payload[key] = bool(payload.get(key, False))
     return payload

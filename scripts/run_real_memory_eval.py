@@ -113,6 +113,57 @@ def _build_eval_cfg(args: argparse.Namespace, adapter: Any) -> EvaluatorConfig:
     )
 
 
+def _safe_segment(text: str) -> str:
+    cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in str(text or "").strip())
+    return cleaned.strip("_") or "unknown"
+
+
+def _resolve_output_layout(output_path: str) -> tuple[Path, Path]:
+    out_path = Path(output_path)
+    if out_path.suffix.lower() == ".json":
+        return out_path, out_path.with_suffix("")
+    return out_path / "result_bundle.json", out_path
+
+
+def _render_retrieved_context(items: Any) -> str:
+    if not isinstance(items, list):
+        return ""
+    lines = []
+    for idx, item in enumerate(items[:5], start=1):
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text", "") or item.get("content", "") or "").strip()
+        if not text:
+            continue
+        lines.append(f"[{idx}] {text}")
+    return "\n".join(lines)
+
+
+def _extract_artifact_refs(adapter: Any, run_ctx: Any) -> Dict[str, Any]:
+    refs: Dict[str, Any] = {}
+    export_fn = getattr(adapter, "export_build_artifact", None)
+    if callable(export_fn):
+        try:
+            refs = dict(export_fn(run_ctx))
+        except Exception:
+            refs = {}
+    if isinstance(run_ctx, dict):
+        refs.setdefault("sample_id", str(run_ctx.get("sample_id", "")))
+        refs.setdefault("run_id", str(run_ctx.get("run_id", "")))
+        refs.setdefault("output_root", str(run_ctx.get("output_root", "")))
+        refs.setdefault("raw_data_path", str(run_ctx.get("raw_data_path", "")))
+        refs.setdefault("config_snapshot", dict(run_ctx.get("config_snapshot", {})))
+    return refs
+
+
+def _write_question_record(run_dir: Path, sample_id: str, question_id: str, record: Dict[str, Any]) -> str:
+    rel_path = Path(_safe_segment(sample_id)) / f"{_safe_segment(question_id)}.json"
+    target = run_dir / rel_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+    return str(rel_path)
+
+
 def run_build(args: argparse.Namespace, dataset_path: Path, adapter: Any) -> Path:
     samples = build_locomo_eval_samples(str(dataset_path), limit=args.limit)
     episodes = json.loads(dataset_path.read_text(encoding="utf-8"))
@@ -160,7 +211,11 @@ def run_baseline(args: argparse.Namespace, dataset_path: Path, adapter: Any) -> 
     by_sample = {str(ep.get("sample_id", "")).strip(): ep for ep in episodes}
     build_manifest = _load_build_manifest_by_sample(args.build_manifest)
     cfg = _build_eval_cfg(args, adapter)
+    bundle_path, run_dir = _resolve_output_layout(str(Path(args.output) if args.output else PROJECT_ROOT / "outputs" / f"{args.memory_system}_baseline.json"))
+    run_dir.mkdir(parents=True, exist_ok=True)
     results: List[Dict[str, Any]] = []
+    question_index: List[Dict[str, Any]] = []
+    errors: List[Dict[str, Any]] = []
     correct = 0
     total = 0
     run_ctx_cache: Dict[str, Any] = {}
@@ -182,60 +237,124 @@ def run_baseline(args: argparse.Namespace, dataset_path: Path, adapter: Any) -> 
             ),
             flush=True,
         )
-        answer_online = adapter.generate_online_answer(run_ctx, sample.question, args.top_k)
-        judgement = judge_answer_correctness(
-            task_type=sample.task_type,
-            question=sample.question,
-            answer_gold=sample.answer_gold,
-            answer_pred=answer_online,
-            cfg=cfg,
-            oracle_context=sample.oracle_context,
-        )
-        is_correct = bool(judgement.final_correct)
-        total += 1
-        correct += int(is_correct)
-        row = {
-            "sample_id": sample.sample_id,
-            "question_id": sample.question_id,
-            "task_type": sample.task_type,
-            "question": sample.question,
-            "answer_gold": sample.answer_gold,
-            "answer_online": answer_online,
-            "rule_correct": judgement.rule_correct,
-            "llm_correct": judgement.llm_correct,
-            "final_correct": judgement.final_correct,
-            "judge_label": judgement.judge_label,
-            "judge_reason": judgement.judge_reason,
-            "judge_payload": judgement.judge_payload,
-        }
-        results.append(row)
-        print(
-            json.dumps(
+        try:
+            answer_online = adapter.generate_online_answer(run_ctx, sample.question, args.top_k)
+            retrieved_context = ""
+            retrieve_fn = getattr(adapter, "retrieve_original", None)
+            if callable(retrieve_fn):
+                try:
+                    retrieved_context = _render_retrieved_context(retrieve_fn(run_ctx, sample.question, args.top_k))
+                except Exception as exc:
+                    retrieved_context = ""
+                    errors.append(
+                        {
+                            "sample_id": sample.sample_id,
+                            "question_id": sample.question_id,
+                            "stage": "baseline_retrieve_context",
+                            "error": str(exc),
+                        }
+                    )
+            judgement = judge_answer_correctness(
+                task_type=sample.task_type,
+                question=sample.question,
+                answer_gold=sample.answer_gold,
+                answer_pred=answer_online,
+                cfg=cfg,
+                judge_mode="online",
+                retrieved_context=retrieved_context,
+            )
+            is_correct = bool(judgement.final_correct)
+            total += 1
+            correct += int(is_correct)
+            row = {
+                "sample_id": sample.sample_id,
+                "question_id": sample.question_id,
+                "task_type": sample.task_type,
+                "question": sample.question,
+                "answer_gold": sample.answer_gold,
+                "answer_online": answer_online,
+                "retrieved_context": retrieved_context,
+                "rule_correct": judgement.rule_correct,
+                "llm_correct": judgement.llm_correct,
+                "final_correct": judgement.final_correct,
+                "judge_label": judgement.judge_label,
+                "judge_reason": judgement.judge_reason,
+                "judge_payload": judgement.judge_payload,
+                "artifact_refs": _extract_artifact_refs(adapter, run_ctx),
+            }
+            results.append(row)
+            result_file = _write_question_record(run_dir, sample.sample_id, sample.question_id, row)
+            question_index.append(
                 {
-                    "event": "baseline_question_done",
                     "sample_id": sample.sample_id,
                     "question_id": sample.question_id,
-                    "answer_online": answer_online,
+                    "task_type": sample.task_type,
                     "final_correct": row["final_correct"],
-                    "judge_label": row["judge_label"],
-                },
-                ensure_ascii=False,
-            ),
-            flush=True,
-        )
+                    "result_file": result_file,
+                }
+            )
+            print(
+                json.dumps(
+                    {
+                        "event": "baseline_question_done",
+                        "sample_id": sample.sample_id,
+                        "question_id": sample.question_id,
+                        "answer_online": answer_online,
+                        "final_correct": row["final_correct"],
+                        "judge_label": row["judge_label"],
+                    },
+                    ensure_ascii=False,
+                ),
+                flush=True,
+            )
+        except Exception as exc:
+            error_record = {
+                "sample_id": sample.sample_id,
+                "question_id": sample.question_id,
+                "task_type": sample.task_type,
+                "question": sample.question,
+                "stage": "baseline",
+                "error": str(exc),
+                "artifact_refs": _extract_artifact_refs(adapter, run_ctx),
+            }
+            errors.append(error_record)
+            result_file = _write_question_record(run_dir, sample.sample_id, sample.question_id, {"status": "BASELINE_ERROR", **error_record})
+            question_index.append(
+                {
+                    "sample_id": sample.sample_id,
+                    "question_id": sample.question_id,
+                    "task_type": sample.task_type,
+                    "final_correct": False,
+                    "result_file": result_file,
+                }
+            )
+            print(json.dumps({"event": "baseline_question_error", **error_record}, ensure_ascii=False), flush=True)
     summary = {
         "memory_system": args.memory_system,
         "mode": "baseline",
         "sample_filter": args.sample_id,
-        "count": total,
+        "count": total + len([e for e in errors if e.get("stage") == "baseline"]),
         "final_correct": correct,
         "final_accuracy": (correct / total) if total else 0.0,
+        "errors": len([e for e in errors if e.get("stage") == "baseline"]),
         "adapter_manifest": export_adapter_runtime_manifest(adapter),
     }
-    out_path = Path(args.output) if args.output else PROJECT_ROOT / "outputs" / f"{args.memory_system}_baseline.json"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps({"summary": summary, "results": results}, ensure_ascii=False, indent=2), encoding="utf-8")
-    return out_path
+    payload = {
+        "summary": summary,
+        "question_index": question_index,
+        "results": results,
+        "errors": errors,
+        "artifacts": {
+            "run_summary": "run_summary.json",
+            "question_index": "question_index.json",
+            "questions_root": ".",
+        },
+    }
+    (run_dir / "run_summary.json").write_text(json.dumps({"summary": summary, "errors": errors}, ensure_ascii=False, indent=2), encoding="utf-8")
+    (run_dir / "question_index.json").write_text(json.dumps(question_index, ensure_ascii=False, indent=2), encoding="utf-8")
+    bundle_path.parent.mkdir(parents=True, exist_ok=True)
+    bundle_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return bundle_path
 
 
 def run_eval(args: argparse.Namespace, dataset_path: Path, adapter: Any) -> Path:
@@ -258,15 +377,19 @@ def run_eval(args: argparse.Namespace, dataset_path: Path, adapter: Any) -> Path
 
 def main() -> None:
     args = parse_args()
-    dataset_path = load_dataset((PROJECT_ROOT / args.dataset).resolve(), args.sample_id)
-    adapter = create_adapter_by_system(args.memory_system, build_adapter_config(args))
-    if args.mode == "build":
-        out_path = run_build(args, dataset_path, adapter)
-    elif args.mode == "baseline":
-        out_path = run_baseline(args, dataset_path, adapter)
-    else:
-        out_path = run_eval(args, dataset_path, adapter)
-    print(json.dumps({"ok": True, "memory_system": args.memory_system, "mode": args.mode, "output": str(out_path)}, ensure_ascii=False))
+    try:
+        dataset_path = load_dataset((PROJECT_ROOT / args.dataset).resolve(), args.sample_id)
+        adapter = create_adapter_by_system(args.memory_system, build_adapter_config(args))
+        if args.mode == "build":
+            out_path = run_build(args, dataset_path, adapter)
+        elif args.mode == "baseline":
+            out_path = run_baseline(args, dataset_path, adapter)
+        else:
+            out_path = run_eval(args, dataset_path, adapter)
+        print(json.dumps({"ok": True, "memory_system": args.memory_system, "mode": args.mode, "output": str(out_path)}, ensure_ascii=False))
+    except Exception as exc:
+        print(json.dumps({"ok": False, "memory_system": args.memory_system, "mode": args.mode, "error": str(exc)}, ensure_ascii=False))
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

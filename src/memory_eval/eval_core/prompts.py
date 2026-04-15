@@ -215,20 +215,39 @@ def build_correctness_judge_prompt(
     question: str,
     answer_gold: str,
     answer_pred: str,
+    judge_mode: str = "online",
     oracle_context: str = "",
     retrieved_context: str = "",
 ) -> str:
-    task_desc = (
-        "NEG 任务：参考 TiMem 的 generous judge 风格，判断模型回答是否符合给定正确答案；正确答案通常是拒答或不可判断。"
-        if task_type == "NEG"
-        else "POS 任务：参考 TiMem 的 generous judge 风格，判断模型回答是否与正确答案语义等价。"
+    if task_type == "NEG":
+        task_desc = (
+            "NEG 任务：参考 TiMem 的宽松语义判分风格，但要额外检查模型是否正确拒答、是否编造了无依据事实。"
+        )
+    else:
+        task_desc = (
+            "POS 任务：参考 TiMem 的宽松语义判分风格，判断模型回答是否与正确答案语义等价。"
+            " 如果模型回答是显式拒答、未找到证据、未提及、无法判断等，则应判为 WRONG。"
+        )
+    mode_desc = (
+        "当前是 ONLINE 判分：只能依据 question、gold answer、generated answer，以及系统真实检索上下文进行判断。"
+        " 不要利用 oracle context 脑补正确答案。"
+        if judge_mode == "online"
+        else "当前是 ORACLE 判分：可以结合 oracle context 判断回答是否正确。"
     )
     return (
         "你的任务是将模型回答标记为 CORRECT 或 WRONG。\n"
-        "你会收到 question、gold answer、generated answer。\n"
-        "请宽松评判：只要 generated answer 触及与 gold 相同主题、语义等价，或包含得到正确答案所需的关键中间信息，就应判为 CORRECT。\n"
-        "对于时间问题，只要指向同一日期、月份、年份或时间段，即使格式不同，也应判为 CORRECT。\n"
-        "请只返回严格 JSON：{\"label\":\"CORRECT|WRONG\",\"reason\":\"...\"}\n"
+        "你会收到 question、gold answer、generated answer，以及可选上下文。\n"
+        "请参考 TiMem 的 generous semantic equivalence 风格进行判断：只要 generated answer 与 gold answer 在语义上等价，"
+        "或给出了得到正确答案所需的关键中间信息，就应判为 CORRECT。\n"
+        "对于时间问题，只要指向同一日期、月份、年份或时间段，即使格式不同，也可判为 CORRECT。\n"
+        "但对于 POS 任务，若 generated answer 实质上是拒答、未找到、未提及、无法判断、没有证据等，则必须判为 WRONG。\n"
+        "对于 NEG 任务，应重点检查 generated answer 是否保持拒答/谨慎，是否编造了无依据事实。\n"
+        "请只返回严格 JSON："
+        "{\"label\":\"CORRECT|WRONG\",\"reason\":\"...\",\"semantic_match\":true|false,"
+        "\"temporal_match\":true|false,\"refusal_expected\":true|false,"
+        "\"refusal_present\":true|false,\"fabricated\":true|false}\n"
+        f"JudgeMode: {judge_mode}\n"
+        f"ModeInstruction: {mode_desc}\n"
         f"TaskDefinition: {task_desc}\n"
         f"Question: {question}\n"
         f"CorrectAnswer: {answer_gold}\n"

@@ -127,6 +127,7 @@ class MemboxAdapter(BaseMemoryAdapter):
             "raw_data_path": str(run_ctx.get("raw_data_path", "")),
             "output_root": str(run_ctx.get("output_root", "")),
             "config_snapshot": dict(run_ctx.get("config_snapshot", {})),
+            "runtime_warnings": list(run_ctx.get("runtime_warnings", [])),
         }
 
     def load_build_artifact(self, manifest: Dict[str, Any]) -> Any:
@@ -175,6 +176,7 @@ class MemboxAdapter(BaseMemoryAdapter):
                 "memory_system": "membox",
                 "run_id": str(run_ctx.get("run_id", "")),
                 "output_root": str(run_ctx.get("output_root", "")),
+                "runtime_warnings": list(run_ctx.get("runtime_warnings", [])),
             },
         )
 
@@ -346,6 +348,8 @@ class MemboxAdapter(BaseMemoryAdapter):
 
     def _build_worker(self):
         worker = self._module.LLMWorker()
+        runtime_warnings = []
+        worker._memory_eval_runtime_warnings = runtime_warnings
         timeout = float(self.config.request_timeout_sec or 0.0)
         if timeout <= 0:
             return worker
@@ -362,10 +366,12 @@ class MemboxAdapter(BaseMemoryAdapter):
                 emb = None
                 try:
                     emb = resp.data[0].embedding
-                except Exception:
+                except Exception as exc:
+                    runtime_warnings.append(f"embedding response missing embedding payload: {exc}")
                     emb = None
                 return emb if emb is not None else [0.0] * 1536
-            except Exception:
+            except Exception as exc:
+                runtime_warnings.append(f"embedding request failed: {exc}")
                 return [0.0] * 1536
 
         def chat_completion(prompt, note="Completion", json_mode=False, extra=None):
@@ -384,7 +390,8 @@ class MemboxAdapter(BaseMemoryAdapter):
                     extra_payload.update(extra)
                 self._module.TokenAnalyzer.log_usage(resp.usage, note, extra_payload)
                 return resp.choices[0].message.content.strip()
-            except Exception:
+            except Exception as exc:
+                runtime_warnings.append(f"chat completion failed: {exc}")
                 return "{}" if json_mode else ""
 
         worker.get_embedding = get_embedding
@@ -416,6 +423,7 @@ class MemboxAdapter(BaseMemoryAdapter):
             "run_id": run_id,
             "worker": worker,
             "retriever": retriever,
+            "runtime_warnings": getattr(worker, "_memory_eval_runtime_warnings", []),
             "config_snapshot": {
                 "llm_model": cfg.LLM_MODEL,
                 "embedding_model": cfg.EMBEDDING_MODEL,

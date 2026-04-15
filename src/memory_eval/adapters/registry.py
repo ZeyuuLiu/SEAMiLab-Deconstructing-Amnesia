@@ -4,7 +4,9 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict
 
+from memory_eval.adapters.gam_adapter import GAMAdapter, GAMAdapterConfig
 from memory_eval.adapters.membox_adapter import MemboxAdapter, MemboxAdapterConfig
+from memory_eval.adapters.memos_adapter import MemOSAdapter, MemOSAdapterConfig
 from memory_eval.adapters.o_mem_adapter import OMemAdapter, OMemAdapterConfig
 
 
@@ -52,6 +54,22 @@ def _build_o_mem_stable_eval(raw: Dict[str, Any]) -> OMemAdapter:
     return OMemAdapter(config=cfg)
 
 
+def _build_gam(raw: Dict[str, Any]) -> GAMAdapter:
+    cfg_raw = dict(raw)
+    if not cfg_raw.get("gam_root"):
+        cfg_raw["gam_root"] = str(Path(__file__).resolve().parents[3] / "system" / "general-agentic-memory-main")
+    cfg = GAMAdapterConfig(**cfg_raw)
+    return GAMAdapter(config=cfg)
+
+
+def _build_memos(raw: Dict[str, Any]) -> MemOSAdapter:
+    cfg_raw = dict(raw)
+    if not cfg_raw.get("memos_root"):
+        cfg_raw["memos_root"] = str(Path(__file__).resolve().parents[3] / "system" / "MemOS-main")
+    cfg = MemOSAdapterConfig(**cfg_raw)
+    return MemOSAdapter(config=cfg)
+
+
 # One memory system = one dedicated adapter implementation module.
 # 一套记忆系统 = 一份独立适配器实现模块。
 _ADAPTER_BUILDERS: Dict[str, AdapterBuilder] = {
@@ -63,6 +81,13 @@ _ADAPTER_BUILDERS: Dict[str, AdapterBuilder] = {
     "o_mem:stable_eval": _build_o_mem_stable_eval,
     "omem": _build_o_mem,
     "omem:stable_eval": _build_o_mem_stable_eval,
+    "gam": _build_gam,
+    "gam_stable_eval": _build_gam,
+    "general_agentic_memory": _build_gam,
+    "memos": _build_memos,
+    "memos_stable_eval": _build_memos,
+    "memos_api": _build_memos,
+    "memos-api": _build_memos,
 }
 
 

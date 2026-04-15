@@ -1,7 +1,14 @@
 from __future__ import annotations
 
+import sys
 import tempfile
 import unittest
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
 from memory_eval.adapters import BaseMemoryAdapter, create_adapter_by_system, export_adapter_runtime_manifest
 
@@ -45,6 +52,18 @@ class AdapterRegistryTests(unittest.TestCase):
             manifest = export_adapter_runtime_manifest(adapter)
             self.assertEqual(manifest["capabilities"]["family"], "o_mem")
             self.assertTrue(manifest["capabilities"]["supports_full_memory_export"])
+
+    def test_gam_manifest_exports_capabilities(self):
+        adapter = create_adapter_by_system("gam_stable_eval", {})
+        manifest = export_adapter_runtime_manifest(adapter)
+        self.assertEqual(manifest["capabilities"]["family"], "gam")
+        self.assertTrue(manifest["capabilities"]["supports_original_retrieval"])
+
+    def test_memos_manifest_exports_capabilities(self):
+        adapter = create_adapter_by_system("memos_stable_eval", {})
+        manifest = export_adapter_runtime_manifest(adapter)
+        self.assertEqual(manifest["capabilities"]["family"], "memos")
+        self.assertTrue(manifest["capabilities"]["supports_online_answer"])
 
 
 if __name__ == "__main__":
