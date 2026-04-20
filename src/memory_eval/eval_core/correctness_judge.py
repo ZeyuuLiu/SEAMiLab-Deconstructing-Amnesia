@@ -55,7 +55,7 @@ def judge_answer_correctness(
             llm_available = True
             llm_correct = bool(llm_payload.get("correct", False))
     if cfg.correctness_use_llm_judge and llm_available:
-        final_correct = bool(llm_correct) and not hard_veto
+        final_correct = bool(llm_correct)
         judge_label = "LLM"
         judge_reason = str((llm_payload or {}).get("reason", "LLM correctness judge.")) if llm_payload is not None else "LLM judge unavailable."
     else:
@@ -88,4 +88,4 @@ def _rule_correct(*, task_type: str, answer_gold: str, answer_pred: str) -> bool
 
 
 def _hard_veto(*, task_type: str, answer_pred: str) -> bool:
-    return task_type != "NEG" and is_abstain(answer_pred)
+    return False

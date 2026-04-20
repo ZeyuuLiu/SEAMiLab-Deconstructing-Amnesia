@@ -26,6 +26,9 @@ This iteration focuses on:
 15. Strict full-path fail-fast evaluation policy (LLM-required)
 16. Registry-based per-memory-system adapter creation (`one system -> one adapter module`)
 17. O-Mem native retrieval->generation online path integration in real mode
+18. Experimental GAM adapter integration for baseline/eval entrypoints
+19. Relaxed TiMem-style LLM-as-judge prompt for correctness evaluation
+20. MemBox trace-aware memory export (`time_traces` + box content) for encoding probe alignment
 
 This is still a step-by-step implementation stage, not a full production pipeline.
 
@@ -333,11 +336,23 @@ The current recommended entrypoint for real reproduction and evaluation is:
 Detailed runbook:
 
 - `docs/architecture/omem-membox-rerun-and-eval-runbook-zh-v0.2.md`
+- `docs/setup/project-overview-and-run-guide-zh-v0.1.md`
+- `docs/setup/memoryos-main-reproduction-runbook-zh-v0.1.md`
 
 Current recommended stable system keys:
 
 1. `o_mem_stable_eval`
 2. `membox_stable_eval`
+
+Experimental system keys:
+
+1. `gam_stable_eval`
+
+Notes:
+
+1. `gam_stable_eval` is integrated into the registry and intended for ongoing adapter development and extended baseline comparison.
+2. `membox_stable_eval` now exports both final box content and `time_traces` into the memory view, improving encoding-layer observability.
+3. The correctness LLM-as-judge prompt is now aligned with a more generous TiMem-style semantic-equivalence policy.
 
 ### O-Mem baseline
 
@@ -409,6 +424,32 @@ conda run -n memeval-membox-v1 python scripts/run_real_memory_eval.py \
   --output outputs/membox_conv26_eval.json
 ```
 
+### GAM baseline (experimental)
+
+```bash
+python scripts/run_real_memory_eval.py \
+  --memory-system gam_stable_eval \
+  --mode baseline \
+  --dataset data/locomo10.json \
+  --sample-id conv-26 \
+  --keys-path configs/keys.local.json \
+  --top-k 10 \
+  --output outputs/gam_conv26_baseline.json
+```
+
+### GAM eval (experimental)
+
+```bash
+python scripts/run_real_memory_eval.py \
+  --memory-system gam_stable_eval \
+  --mode eval \
+  --dataset data/locomo10.json \
+  --sample-id conv-26 \
+  --keys-path configs/keys.local.json \
+  --top-k 10 \
+  --output outputs/gam_conv26_eval.json
+```
+
 ### Output structure
 
 `baseline` writes one aggregate JSON file.
@@ -473,3 +514,7 @@ Adapter must implement:
 9. `docs/architecture/three-probe-framework-implementation-bilingual-v0.6.1.md`
 10. `docs/architecture/one-memory-system-full-evaluation-flow-bilingual-v0.6.2.md`
 11. `docs/architecture/omem-membox-rerun-and-eval-runbook-zh-v0.2.md`
+12. `docs/architecture/gam-memos-adapter-blueprint-zh-v0.1.md`
+13. `docs/architecture/baseline-framework-status-and-candidates-zh-v0.1.md`
+14. `docs/setup/project-overview-and-run-guide-zh-v0.1.md`
+15. `docs/setup/memoryos-main-reproduction-runbook-zh-v0.1.md`

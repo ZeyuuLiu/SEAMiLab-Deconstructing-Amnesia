@@ -182,6 +182,7 @@ class MemboxAdapter(BaseMemoryAdapter):
 
     def export_full_memory(self, run_ctx: Any) -> List[Dict[str, Any]]:
         boxes = self._load_boxes(run_ctx)
+        traces = self._load_time_traces(run_ctx)
         out: List[Dict[str, Any]] = []
         for box in boxes:
             feat = box.get("features", {})
@@ -205,6 +206,29 @@ class MemboxAdapter(BaseMemoryAdapter):
                         "content_text": content_text,
                         "events_text": events_text,
                         "topic_kw_text": topic_kw_text,
+                    },
+                }
+            )
+        for trace in traces:
+            entries_text = str(trace.get("entries_text", "")).strip()
+            if not entries_text:
+                continue
+            entry_events: List[str] = []
+            for entry in trace.get("entries", []) if isinstance(trace.get("entries", []), list) else []:
+                if isinstance(entry, dict):
+                    entry_events.extend([str(ev).strip() for ev in entry.get("events", []) if str(ev).strip()])
+            out.append(
+                {
+                    "id": f"trace-{trace.get('trace_id')}",
+                    "text": entries_text,
+                    "meta": {
+                        "source": "membox_time_trace",
+                        "trace_id": trace.get("trace_id"),
+                        "sample_id": trace.get("sample_id"),
+                        "metric": trace.get("metric"),
+                        "box_ids": list(trace.get("box_ids", [])) if isinstance(trace.get("box_ids", []), list) else [],
+                        "entries_text": entries_text,
+                        "events": entry_events,
                     },
                 }
             )
@@ -233,8 +257,10 @@ class MemboxAdapter(BaseMemoryAdapter):
                         str(meta.get("content_text", "")),
                         str(meta.get("events_text", "")),
                         str(meta.get("topic_kw_text", "")),
+                        str(meta.get("entries_text", "")),
                     ]
                 )
+                variants.extend([str(ev) for ev in meta.get("events", []) if str(ev).strip()] if isinstance(meta.get("events", []), list) else [])
             if any(text_match(fact, variant) for fact in f_key for variant in variants if fact):
                 scored.append((10.0, rec))
                 continue
@@ -307,6 +333,13 @@ class MemboxAdapter(BaseMemoryAdapter):
 
     def _load_boxes(self, run_ctx: Any) -> List[Dict[str, Any]]:
         path = Path(str(run_ctx["config_snapshot"]["final_content_file"]))
+        if not path.exists():
+            return []
+        with path.open("r", encoding="utf-8") as f:
+            return [json.loads(line) for line in f if line.strip()]
+
+    def _load_time_traces(self, run_ctx: Any) -> List[Dict[str, Any]]:
+        path = Path(str(run_ctx["config_snapshot"]["time_trace_file"]))
         if not path.exists():
             return []
         with path.open("r", encoding="utf-8") as f:

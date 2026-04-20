@@ -93,6 +93,9 @@ class AttributionAgent:
                 secondary_llm = [str(x).strip().lower() for x in llm_result.get("secondary_causes", []) if str(x).strip()]
                 secondary_causes = [x for x in secondary_llm if x in {"encoding", "retrieval", "generation"} and x != primary_cause]
                 decision_trace.extend([str(x) for x in llm_result.get("decision_trace", []) if str(x).strip()])
+                defect_union = [str(x).strip().upper() for x in llm_result.get("defect_union", []) if str(x).strip()]
+                if defect_union:
+                    decision_trace.append(f"LLM defect union suggestion: {', '.join(defect_union)}")
                 summary = str(llm_result.get("summary", summary))
                 llm_payload = dict(llm_result)
         return AttributionAssessment(

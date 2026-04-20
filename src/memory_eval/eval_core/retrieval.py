@@ -181,13 +181,13 @@ def evaluate_retrieval_probe(inp: RetrievalProbeInput, cfg: EvaluatorConfig, s_e
             raise RuntimeError("retrieval POS llm judgement failed or empty")
         if isinstance(llm_pos_judgement, dict):
             state_hint = str(llm_pos_judgement.get("retrieval_state", "")).upper()
-            defects = [str(x).upper() for x in llm_pos_judgement.get("defects", []) if str(x).strip() and str(x).upper() in {"LATE", "NOI"}]
-            if not is_strict_llm_probe(cfg) and state_hint in {"HIT", "MISS", "NOISE"}:
+            defects = [str(x).upper() for x in llm_pos_judgement.get("defects", []) if str(x).strip() and str(x).upper() in {"RF", "LATE", "NOI"}]
+            if not is_strict_llm_probe(cfg) and state_hint in {"HIT", "MISS"}:
                 if rank > cfg.tau_rank and "LATE" not in defects:
                     defects.append("LATE")
                 if snr < cfg.tau_snr and "NOI" not in defects:
                     defects.append("NOI")
-            if state_hint in {"HIT", "MISS", "NOISE"}:
+            if state_hint in {"HIT", "MISS"}:
                 return ProbeResult(
                     probe="ret",
                     state=state_hint,

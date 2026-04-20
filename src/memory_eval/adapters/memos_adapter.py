@@ -5,12 +5,12 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
 
 from memory_eval.adapters.base import BaseMemoryAdapter
-from memory_eval.eval_core.models import AdapterTrace
+from memory_eval.eval_core.models import AdapterTrace, RetrievedItem
 
 
 @dataclass
@@ -34,9 +34,32 @@ class MemOSAdapterConfig:
 class MemOSAdapter(BaseMemoryAdapter):
     family = "memos"
 
-    def __init__(self, config: MemOSAdapterConfig):
+    def __init__(self, config: Optional[MemOSAdapterConfig] = None):
         super().__init__()
-        self.config = config
+        cfg = config or MemOSAdapterConfig()
+        creds = self.merge_runtime_credentials(
+            api_key=cfg.api_key or cfg.chat_model_api_key,
+            base_url=cfg.base_url or cfg.chat_model_base_url,
+            model=cfg.chat_model or cfg.llm_model,
+            keys_path=cfg.keys_path,
+            require_complete=False,
+        )
+        self.config = MemOSAdapterConfig(
+            memos_root=cfg.memos_root,
+            memos_url=cfg.memos_url,
+            memos_online_url=cfg.memos_online_url,
+            memos_key=cfg.memos_key,
+            api_key=creds["api_key"],
+            base_url=creds["base_url"],
+            chat_model_api_key=cfg.chat_model_api_key or creds["api_key"],
+            chat_model_base_url=cfg.chat_model_base_url or creds["base_url"],
+            chat_model=cfg.chat_model or creds["model"] or "gpt-4o-mini",
+            llm_model=creds["model"] or cfg.llm_model or cfg.chat_model or "gpt-4o-mini",
+            keys_path=creds["keys_path"],
+            memory_dir=cfg.memory_dir,
+            lib=cfg.lib,
+            search_mode=cfg.search_mode,
+        )
 
     def capabilities(self) -> Dict[str, Any]:
         return {
@@ -184,15 +207,30 @@ class MemOSAdapter(BaseMemoryAdapter):
         return self._answer_with_context(question=question, context=context)
 
     def build_trace_for_query(self, run_ctx: Any, query: str, oracle_context: str, top_k: int) -> AdapterTrace:
-        retrieved = self.retrieve_original(run_ctx, query, top_k=top_k)
+        memory_view = self.export_full_memory(run_ctx)
+        raw_items = self.retrieve_original(run_ctx, query, top_k=top_k)
+        retrieved = [
+            RetrievedItem(
+                id=str(item.get("id", "")),
+                text=str(item.get("text", "")),
+                score=float(item.get("score", 0.0) or 0.0),
+                meta=dict(item.get("meta", {})) if isinstance(item.get("meta", {}), dict) else {},
+            )
+            for item in raw_items
+        ]
         online_answer = self.generate_online_answer(run_ctx, query, top_k=top_k)
         oracle_answer = self.generate_oracle_answer(run_ctx, query, oracle_context)
         return AdapterTrace(
-            query=query,
+            memory_view=memory_view,
             retrieved_items=retrieved,
-            online_answer=online_answer,
-            oracle_answer=oracle_answer,
-            raw_trace={"memory_system": self.family, "run_dir": run_ctx.get("run_dir", "")},
+            answer_online=online_answer,
+            answer_oracle=oracle_answer,
+            raw_trace={
+                "memory_system": self.family,
+                "run_dir": run_ctx.get("run_dir", ""),
+                "memory_count": len(memory_view),
+                "retrieved_count": len(retrieved),
+            },
         )
 
     def export_build_artifact(self, run_ctx: Any) -> Dict[str, Any]:

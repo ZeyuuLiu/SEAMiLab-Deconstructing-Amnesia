@@ -27,6 +27,28 @@ class LLMAssistConfig:
     temperature: float = 0.0
 
 
+def _extract_json_object(text: str) -> Dict[str, Any]:
+    content = str(text or "").strip()
+    if content.startswith("```"):
+        lines = content.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        content = "\n".join(lines).strip()
+    if content.lower().startswith("json"):
+        content = content[4:].strip()
+    try:
+        return json.loads(content)
+    except Exception:
+        pass
+    start = content.find("{")
+    end = content.rfind("}")
+    if start >= 0 and end > start:
+        return json.loads(content[start : end + 1])
+    raise ValueError("No valid JSON object found in LLM response")
+
+
 def _chat_json(cfg: LLMAssistConfig, prompt: str, *, must_succeed: bool = False) -> Dict[str, Any] | None:
     if not cfg.api_key or not cfg.base_url:
         if must_succeed:
@@ -51,11 +73,7 @@ def _chat_json(cfg: LLMAssistConfig, prompt: str, *, must_succeed: bool = False)
             raw = resp.read().decode("utf-8")
         obj = json.loads(raw)
         content = str(obj["choices"][0]["message"]["content"]).strip()
-        if content.startswith("```"):
-            content = content.strip("`")
-            if content.startswith("json"):
-                content = content[4:].strip()
-        return json.loads(content)
+        return _extract_json_object(content)
     except Exception as exc:
         if must_succeed:
             raise RuntimeError(f"LLM chat/completions failed or returned non-JSON: {exc}") from exc

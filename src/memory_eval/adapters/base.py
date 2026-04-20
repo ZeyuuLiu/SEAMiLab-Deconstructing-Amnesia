@@ -22,22 +22,45 @@ def load_runtime_credentials(keys_path: Optional[str] = None, require_complete: 
     path_api_key = ""
     path_base_url = ""
     path_model = ""
+    path_system_model = ""
+    path_eval_model = ""
     candidate = Path(keys_path).resolve() if keys_path else default_keys_path()
     if candidate.exists():
         raw = json.loads(candidate.read_text(encoding="utf-8-sig"))
         path_api_key = str(raw.get("api_key", "")).strip()
         path_base_url = str(raw.get("base_url", "")).strip()
         path_model = str(raw.get("model", "")).strip()
+        path_system_model = str(raw.get("system_model", "")).strip()
+        path_eval_model = str(raw.get("eval_model", "")).strip()
 
     api_key = os.getenv("MEMORY_EVAL_API_KEY", "").strip() or os.getenv("OPENAI_API_KEY", "").strip() or path_api_key
     base_url = os.getenv("MEMORY_EVAL_BASE_URL", "").strip() or os.getenv("OPENAI_BASE_URL", "").strip() or path_base_url
-    model = os.getenv("MEMORY_EVAL_MODEL", "").strip() or path_model
+    system_model = (
+        os.getenv("MEMORY_SYSTEM_MODEL", "").strip()
+        or os.getenv("MEMORY_EVAL_SYSTEM_MODEL", "").strip()
+        or path_system_model
+        or path_model
+    )
+    eval_model = (
+        os.getenv("MEMORY_EVAL_LLM_MODEL", "").strip()
+        or os.getenv("MEMORY_EVAL_MODEL", "").strip()
+        or path_eval_model
+        or system_model
+    )
+    model = system_model
     if require_complete and (not api_key or not base_url):
         raise ValueError(
             "缺少 API 凭据：请设置 MEMORY_EVAL_API_KEY/MEMORY_EVAL_BASE_URL（或 OPENAI_API_KEY/OPENAI_BASE_URL），"
             "或提供本地 keys 文件。"
         )
-    return {"api_key": api_key, "base_url": base_url, "model": model, "keys_path": str(candidate)}
+    return {
+        "api_key": api_key,
+        "base_url": base_url,
+        "model": model,
+        "system_model": system_model,
+        "eval_model": eval_model,
+        "keys_path": str(candidate),
+    }
 
 
 class BaseMemoryAdapter:

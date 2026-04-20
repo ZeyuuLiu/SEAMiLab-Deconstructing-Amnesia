@@ -201,20 +201,20 @@ class EvaluatorConfig:
     tau_snr: float = 0.2
     neg_noise_score_threshold: float = 0.15
     max_workers: int = 3  # parallel probes / 三探针并行线程数
-    # LLM-assisted probe judgments are opt-in by default.
-    # 默认配置应可本地直接运行，LLM 辅助判定改为显式开启。
-    use_llm_assist: bool = False
-    llm_model: str = "gpt-4o-mini"
+    # LLM-assisted probe judgments are enabled by default.
+    # 默认评测采用 LLM 主判与严格模式。
+    use_llm_assist: bool = True
+    llm_model: str = "gpt-5-mini"
     llm_temperature: float = 0.0
     llm_api_key: str = ""
     llm_base_url: str = "https://vip.dmxapi.com/v1"
     correctness_use_llm_judge: bool = False
     correctness_require_llm_judge: bool = False
-    # Strict execution policy is opt-in.
-    # 严格执行策略改为显式开启，避免无 API key 时开箱即失败。
-    require_llm_judgement: bool = False
+    # Strict execution policy is enabled by default.
+    # 默认要求 LLM 判定成功，不回退到规则。
+    require_llm_judgement: bool = True
     strict_adapter_call: bool = True
-    disable_rule_fallback: bool = False
+    disable_rule_fallback: bool = True
     require_online_answer: bool = False
     # Encoding: merge native retrieval into LLM candidate set (observation alignment).
     encoding_merge_native_retrieval: bool = True

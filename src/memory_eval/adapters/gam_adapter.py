@@ -5,10 +5,10 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from memory_eval.adapters.base import BaseMemoryAdapter
-from memory_eval.eval_core.models import AdapterTrace
+from memory_eval.eval_core.models import AdapterTrace, RetrievedItem
 
 
 @dataclass
@@ -32,9 +32,32 @@ class GAMAdapterConfig:
 class GAMAdapter(BaseMemoryAdapter):
     family = "gam"
 
-    def __init__(self, config: GAMAdapterConfig):
+    def __init__(self, config: Optional[GAMAdapterConfig] = None):
         super().__init__()
-        self.config = config
+        cfg = config or GAMAdapterConfig()
+        creds = self.merge_runtime_credentials(
+            api_key=cfg.api_key,
+            base_url=cfg.base_url,
+            model=cfg.llm_model or cfg.model,
+            keys_path=cfg.keys_path,
+            require_complete=False,
+        )
+        self.config = GAMAdapterConfig(
+            gam_root=cfg.gam_root,
+            api_key=creds["api_key"],
+            base_url=creds["base_url"],
+            model=cfg.model or creds["model"] or "gpt-4o-mini",
+            llm_model=creds["model"] or cfg.llm_model or cfg.model or "gpt-4o-mini",
+            keys_path=creds["keys_path"],
+            memory_model=cfg.memory_model,
+            research_model=cfg.research_model,
+            working_model=cfg.working_model,
+            memory_dir=cfg.memory_dir,
+            top_k=cfg.top_k,
+            max_iters=cfg.max_iters,
+            use_bm25=cfg.use_bm25,
+            use_dense=cfg.use_dense,
+        )
 
     def capabilities(self) -> Dict[str, Any]:
         return {
@@ -188,15 +211,30 @@ class GAMAdapter(BaseMemoryAdapter):
         return str(raw.get("text", "")).strip()
 
     def build_trace_for_query(self, run_ctx: Any, query: str, oracle_context: str, top_k: int) -> AdapterTrace:
-        retrieved = self.retrieve_original(run_ctx, query, top_k=top_k)
+        memory_view = self.export_full_memory(run_ctx)
+        raw_items = self.retrieve_original(run_ctx, query, top_k=top_k)
+        retrieved = [
+            RetrievedItem(
+                id=str(item.get("id", "")),
+                text=str(item.get("text", "")),
+                score=float(item.get("score", 0.0) or 0.0),
+                meta=dict(item.get("meta", {})) if isinstance(item.get("meta", {}), dict) else {},
+            )
+            for item in raw_items
+        ]
         online_answer = self.generate_online_answer(run_ctx, query, top_k=top_k)
         oracle_answer = self.generate_oracle_answer(run_ctx, query, oracle_context)
         return AdapterTrace(
-            query=query,
+            memory_view=memory_view,
             retrieved_items=retrieved,
-            online_answer=online_answer,
-            oracle_answer=oracle_answer,
-            raw_trace={"memory_system": self.family, "run_dir": run_ctx.get("run_dir", "")},
+            answer_online=online_answer,
+            answer_oracle=oracle_answer,
+            raw_trace={
+                "memory_system": self.family,
+                "run_dir": run_ctx.get("run_dir", ""),
+                "memory_count": len(memory_view),
+                "retrieved_count": len(retrieved),
+            },
         )
 
     def export_build_artifact(self, run_ctx: Any) -> Dict[str, Any]:
@@ -218,19 +256,23 @@ class GAMAdapter(BaseMemoryAdapter):
         from gam_research.agents.research_agent import ResearchAgent
         from gam_research.config.generator import OpenAIGeneratorConfig
         from gam_research.generator.openai_generator import OpenAIGenerator
-        from gam_research.retriever.bm25 import BM25Retriever
-        from gam_research.retriever.dense_retriever import DenseRetriever
         from gam_research.retriever.index_retriever import IndexRetriever
         from gam_research.schemas.memory import InMemoryMemoryStore
         from gam_research.schemas.page import InMemoryPageStore
         from gam_research.schemas.search import Hit
+        BM25Retriever = None
+        if self.config.use_bm25:
+            try:
+                from gam_research.retriever.bm25 import BM25Retriever as _BM25Retriever
+                BM25Retriever = _BM25Retriever
+            except Exception:
+                BM25Retriever = None
         return {
             "MemoryAgent": MemoryAgent,
             "ResearchAgent": ResearchAgent,
             "OpenAIGenerator": OpenAIGenerator,
             "OpenAIGeneratorConfig": OpenAIGeneratorConfig,
             "BM25Retriever": BM25Retriever,
-            "DenseRetriever": DenseRetriever,
             "IndexRetriever": IndexRetriever,
             "InMemoryMemoryStore": InMemoryMemoryStore,
             "InMemoryPageStore": InMemoryPageStore,
@@ -260,7 +302,7 @@ class GAMAdapter(BaseMemoryAdapter):
         keyword = _SimpleKeywordRetriever(hit_cls=deps["Hit"])
         keyword.build(page_store)
         retrievers["keyword"] = keyword
-        if self.config.use_bm25:
+        if self.config.use_bm25 and deps.get("BM25Retriever") is not None:
             try:
                 bm25 = deps["BM25Retriever"]({"index_dir": str(run_dir / "index_bm25"), "threads": 1})
                 bm25.build(page_store)
@@ -268,12 +310,9 @@ class GAMAdapter(BaseMemoryAdapter):
             except Exception:
                 pass
         if self.config.use_dense:
-            try:
-                dense = deps["DenseRetriever"]({"index_dir": str(run_dir / "index_dense")})
-                dense.build(page_store)
-                retrievers["vector"] = dense
-            except Exception:
-                pass
+            # Dense retriever is intentionally disabled by default because some
+            # FlagEmbedding/flash-attn builds crash at import time in this environment.
+            pass
         return retrievers
 
     def _render_turn(self, turn: Dict[str, Any]) -> str:

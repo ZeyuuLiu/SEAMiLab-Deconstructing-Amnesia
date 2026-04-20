@@ -36,10 +36,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--membox-root", default="")
     parser.add_argument("--use-real-omem", action="store_true")
     parser.add_argument("--allow-fallback-lightweight", action="store_true")
-    parser.add_argument("--llm-assist", action="store_true")
-    parser.add_argument("--strict-judge", action="store_true")
+    parser.add_argument("--llm-assist", dest="llm_assist", action="store_true")
+    parser.add_argument("--no-llm-assist", dest="llm_assist", action="store_false")
+    parser.add_argument("--strict-judge", dest="strict_judge", action="store_true")
+    parser.add_argument("--no-strict-judge", dest="strict_judge", action="store_false")
     parser.add_argument("--allow-correctness-rule-fallback", action="store_true")
+    parser.add_argument("--eval-model", default="", help="Override evaluator/judge model")
+    parser.add_argument("--system-model", default="", help="Override memory-system model")
     parser.add_argument("--request-timeout-sec", type=float, default=120.0)
+    parser.set_defaults(llm_assist=True, strict_judge=True)
     return parser.parse_args()
 
 
@@ -61,7 +66,7 @@ def build_adapter_config(args: argparse.Namespace) -> Dict[str, Any]:
     cfg: Dict[str, Any] = {
         "api_key": creds.get("api_key", ""),
         "base_url": creds.get("base_url", ""),
-        "llm_model": creds.get("model", "") or "gpt-4o-mini",
+        "llm_model": args.system_model or creds.get("system_model", "") or creds.get("model", "") or "gpt-4o-mini",
         "keys_path": args.keys_path,
     }
     key = str(args.memory_system).lower()
@@ -99,6 +104,7 @@ def _load_build_manifest_by_sample(path: str) -> Dict[str, Dict[str, Any]]:
 
 
 def _build_eval_cfg(args: argparse.Namespace, adapter: Any) -> EvaluatorConfig:
+    creds = load_runtime_credentials(args.keys_path, require_complete=False)
     return EvaluatorConfig(
         use_llm_assist=bool(args.llm_assist),
         require_llm_judgement=bool(args.strict_judge),
@@ -107,7 +113,7 @@ def _build_eval_cfg(args: argparse.Namespace, adapter: Any) -> EvaluatorConfig:
         require_online_answer=False,
         llm_api_key=getattr(adapter.config, "api_key", ""),
         llm_base_url=getattr(adapter.config, "base_url", ""),
-        llm_model=getattr(adapter.config, "llm_model", "gpt-4o-mini"),
+        llm_model=args.eval_model or creds.get("eval_model", "") or "gpt-5-mini",
         correctness_use_llm_judge=True,
         correctness_require_llm_judge=not bool(args.allow_correctness_rule_fallback),
     )

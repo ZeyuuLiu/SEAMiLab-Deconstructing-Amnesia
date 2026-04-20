@@ -4,6 +4,7 @@ import asyncio
 import re
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -654,15 +655,31 @@ class OMemAdapter(BaseMemoryAdapter):
         memory_system.generate_memory_detail_map()
 
     def _run_awaitable(self, awaitable: Any, timeout_sec: float | None = None) -> Any:
-        wrapped = asyncio.wait_for(awaitable, timeout=float(timeout_sec)) if timeout_sec else awaitable
+        async def _runner() -> Any:
+            if timeout_sec:
+                return await asyncio.wait_for(awaitable, timeout=float(timeout_sec))
+            return await awaitable
+
         try:
-            return asyncio.run(wrapped)
+            asyncio.get_running_loop()
         except RuntimeError:
-            loop = asyncio.new_event_loop()
+            return asyncio.run(_runner())
+
+        result_box: Dict[str, Any] = {}
+        error_box: Dict[str, BaseException] = {}
+
+        def _thread_target() -> None:
             try:
-                return loop.run_until_complete(wrapped)
-            finally:
-                loop.close()
+                result_box["value"] = asyncio.run(_runner())
+            except BaseException as exc:  # noqa: BLE001
+                error_box["error"] = exc
+
+        thread = threading.Thread(target=_thread_target, daemon=False)
+        thread.start()
+        thread.join()
+        if "error" in error_box:
+            raise error_box["error"]
+        return result_box.get("value")
 
     def _speaker_from_role(self, role: str) -> str:
         nr = normalize_text(role)
